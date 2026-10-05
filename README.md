@@ -1,11 +1,55 @@
-<div align="center">
+# ZK Voice Hub
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+Premium Anime Streaming Application presented by ZK Dubbing Studio.
 
-  <h1>Built with AI Studio</h2>
+## Technology Stack
+- React + Vite
+- Tailwind CSS
+- Firebase (Auth, Firestore, Storage)
+- Capacitor (for Android APK generation)
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+## Setup Instructions
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+1. **Install Dependencies:**
+   \`\`\`bash
+   npm install
+   \`\`\`
 
-</div>
+2. **Firebase Setup:**
+   - The app uses Firebase Auth and Firestore.
+   - Run the development server to test locally.
+
+3. **Run Development Server:**
+   \`\`\`bash
+   npm run dev
+   \`\`\`
+
+4. **Build Web & Deploy to Cloudflare Pages:**
+   - Run \`npm run build\` to generate the \`dist\` folder.
+   - Deploy the \`dist\` folder to Cloudflare Pages using Wrangler or via GitHub integration.
+
+## Generating Android APK (Capacitor)
+
+1. **Add Capacitor CLI & Android Platform:**
+   \`\`\`bash
+   npm install @capacitor/core @capacitor/android
+   npm install -D @capacitor/cli
+   \`\`\`
+
+2. **Initialize Android Project:**
+   \`\`\`bash
+   npx cap add android
+   \`\`\`
+
+3. **Build the Web App & Sync:**
+   \`\`\`bash
+   npm run build
+   npx cap sync android
+   \`\`\`
+
+4. **Open in Android Studio to Build APK:**
+   \`\`\`bash
+   npx cap open android
+   \`\`\`
+   - In Android Studio, go to \`Build\` > \`Build Bundle(s) / APK(s)\` > \`Build APK(s)\`.
+   - Your APK will be located in \`android/app/build/outputs/apk/debug/\`.

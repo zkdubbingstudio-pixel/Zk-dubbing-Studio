@@ -1,0 +1,6 @@
+{
+  "name": "ZK Voice Hub",
+  "description": "Premium Anime Streaming Application presented by ZK Dubbing Studio",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,6 @@
+{
+  "appId": "com.zkdubbingstudio.zkvoicehub",
+  "appName": "ZK Voice Hub",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}

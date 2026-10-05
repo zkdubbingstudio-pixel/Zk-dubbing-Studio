@@ -1,0 +1,18 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Only allow Super Admin (zkdubbingstudio@gmail.com) to write files
+    function isSuperAdmin() {
+      return request.auth != null && request.auth.token.email == 'zkdubbingstudio@gmail.com';
+    }
+
+    match /{allPaths=**} {
+      // Anyone can read public files
+      allow read: if true;
+      
+      // Only super admin can upload/delete
+      allow write: if isSuperAdmin();
+    }
+  }
+}

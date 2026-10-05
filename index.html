@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>ZK Voice Hub | Anime Streaming</title>
+    <meta name="description" content="ZK Voice Hub - Premium Anime Streaming Presented by ZK Dubbing Studio." />
+    <meta property="og:title" content="ZK Voice Hub" />
+    <meta property="og:description" content="ZK Voice Hub - Premium Anime Streaming Presented by ZK Dubbing Studio." />
+    <meta property="og:image" content="https://i.ibb.co/2Yp3CDq9/file-000000006f2c8211b20c6bedc9f9ac12.png" />
+    <meta property="og:type" content="website" />
+    <meta name="theme-color" content="#05070b" />
+    <link rel="icon" type="image/png" href="https://i.ibb.co/2Yp3CDq9/file-000000006f2c8211b20c6bedc9f9ac12.png" />
+    <link rel="apple-touch-icon" href="https://i.ibb.co/2Yp3CDq9/file-000000006f2c8211b20c6bedc9f9ac12.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <style>
+      #splash-screen {
+        position: fixed;
+        inset: 0;
+        background-color: #05070b;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        transition: opacity 0.5s ease;
+      }
+      .splash-logo-container {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+      }
+      .splash-logo {
+        width: 44px;
+        height: 44px;
+        object-fit: contain;
+        border-radius: 8px;
+        filter: drop-shadow(0 0 15px rgba(0, 229, 255, 0.4));
+      }
+      @media (min-width: 768px) {
+        .splash-logo {
+          width: 52px;
+          height: 52px;
+        }
+      }
+      .splash-text-container {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+      .splash-title {
+        color: #ffffff;
+        font-family: system-ui, -apple-system, sans-serif;
+        font-size: 28px;
+        font-weight: 700;
+        margin: 0 0 4px 0;
+        letter-spacing: -0.5px;
+      }
+      .splash-subtitle {
+        color: #a3a3a3;
+        font-family: system-ui, -apple-system, sans-serif;
+        font-size: 12px;
+        font-weight: 500;
+        margin: 0;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+      }
+      .splash-spinner {
+        margin-top: 40px;
+        width: 32px;
+        height: 32px;
+        border: 3px solid rgba(255, 255, 255, 0.1);
+        border-top-color: #00E5FF;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="splash-screen">
+        <div class="splash-logo-container">
+          <img src="https://i.ibb.co/2Yp3CDq9/file-000000006f2c8211b20c6bedc9f9ac12.png" alt="ZK Logo" class="splash-logo" />
+          <div class="splash-text-container">
+            <h1 class="splash-title">ZK Voice Hub</h1>
+            <p class="splash-subtitle">PRESENTING BY: ZK DUBBING STUDIO</p>
+          </div>
+        </div>
+        <div class="splash-spinner"></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

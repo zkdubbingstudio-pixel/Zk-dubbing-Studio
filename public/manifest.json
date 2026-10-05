@@ -1,0 +1,21 @@
+{
+  "name": "ZK Voice Hub",
+  "short_name": "ZK Voice Hub",
+  "description": "Premium Anime Streaming Application",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    {
+      "src": "https://i.ibb.co/2Yp3CDq9/file-000000006f2c8211b20c6bedc9f9ac12.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://i.ibb.co/2Yp3CDq9/file-000000006f2c8211b20c6bedc9f9ac12.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
