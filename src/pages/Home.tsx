@@ -119,12 +119,12 @@ export default function Home() {
   }
 
   return (
-    <div className="flex flex-col gap-12 sm:gap-16 pb-24 overflow-hidden">
+    <div className="flex flex-col gap-8 sm:gap-14 pb-24 overflow-hidden">
       {/* 1. Futuristic 3D Parallax Hero Banner */}
       <HeroSlider featuredList={featuredList} />
 
       {/* Main Content Sections */}
-      <div className="max-w-7xl mx-auto w-full space-y-12 sm:space-y-16">
+      <div className="max-w-7xl mx-auto w-full space-y-10 sm:space-y-14">
         
         {/* 2. Continue Watching (Interactive / LocalStorage synced) */}
         <ContinueWatchingRow />

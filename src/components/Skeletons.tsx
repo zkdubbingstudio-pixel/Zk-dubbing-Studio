@@ -2,10 +2,10 @@ import React from 'react';
 
 export function HeroSkeleton() {
   return (
-    <div className="relative w-full h-[70vh] min-h-[500px] bg-[#0a0e17] overflow-hidden">
+    <div className="relative w-full h-[58vh] min-h-[390px] max-h-[490px] sm:h-[65vh] sm:min-h-[500px] lg:h-[70vh] lg:max-h-[780px] bg-[#0a0e17] overflow-hidden">
       <div className="absolute inset-0 skeleton-shimmer opacity-40" />
-      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-full flex items-end pb-24 md:pb-32">
-        <div className="max-w-2xl space-y-4 w-full">
+      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-full flex items-end pb-10 sm:pb-16 md:pb-24">
+        <div className="max-w-2xl space-y-3 sm:space-y-4 w-full">
           <div className="w-24 h-6 rounded-full bg-white/10 skeleton-shimmer" />
           <div className="w-3/4 h-12 sm:h-16 rounded-2xl bg-white/10 skeleton-shimmer" />
           <div className="w-full h-16 rounded-xl bg-white/5 skeleton-shimmer" />
