@@ -107,6 +107,7 @@ export default function AnimeDetails() {
     return allEpisodes;
   }, [allEpisodes, selectedSeason, seasons]);
 
+  const isMovie = Boolean(anime?.type === 'Movie' || anime?.contentType === 'Movie' || anime?.isMovie);
   const latestEpisode = allEpisodes.length > 0 ? allEpisodes[allEpisodes.length - 1] : null;
 
   if (initialLoading) {
@@ -191,33 +192,63 @@ export default function AnimeDetails() {
             {anime.title}
           </h1>
 
-          <div className="flex items-center justify-center gap-3 text-xs sm:text-sm font-bold text-silver">
-            <span className="bg-[#101624] px-4 py-1.5 rounded-full border border-white/10">
-              {seasons.length > 0 ? `${seasons.length} Seasons` : 'Season 1'}
-            </span>
-            <span className="bg-[#101624] px-4 py-1.5 rounded-full border border-white/10">
-              {allEpisodes.length} Episodes
-            </span>
-            <span className="bg-[#101624] px-4 py-1.5 rounded-full border border-white/10 text-[#00e5ff]">
-              1080p Ultra HD
-            </span>
-          </div>
+          {(() => {
+            const isMovie = Boolean(anime.type === 'Movie' || anime.contentType === 'Movie' || anime.isMovie);
+            return (
+              <>
+                <div className="flex items-center justify-center gap-3 text-xs sm:text-sm font-bold text-silver">
+                  {isMovie ? (
+                    <>
+                      <span className="bg-[#00e5ff] text-black px-4 py-1.5 rounded-full font-black shadow-[0_0_15px_rgba(0,229,255,0.4)]">
+                        MOVIE
+                      </span>
+                      {anime.duration && (
+                        <span className="bg-[#101624] px-4 py-1.5 rounded-full border border-white/10">
+                          {anime.duration} min
+                        </span>
+                      )}
+                      <span className="bg-[#101624] px-4 py-1.5 rounded-full border border-white/10 text-[#00e5ff]">
+                        1080p Ultra HD
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="bg-[#101624] px-4 py-1.5 rounded-full border border-white/10">
+                        {seasons.length > 0 ? `${seasons.length} Seasons` : 'Season 1'}
+                      </span>
+                      <span className="bg-[#101624] px-4 py-1.5 rounded-full border border-white/10">
+                        {allEpisodes.length} Episodes
+                      </span>
+                      <span className="bg-[#101624] px-4 py-1.5 rounded-full border border-white/10 text-[#00e5ff]">
+                        1080p Ultra HD
+                      </span>
+                    </>
+                  )}
+                </div>
 
-          <div className="pt-2">
-            <button
-              onClick={() => {
-                if (latestEpisode) {
-                  const sId = latestEpisode.seasonId || latestEpisode.season_id || 's1';
-                  navigate(`/watch/${anime.id}/${sId}/${latestEpisode.id}`);
-                }
-              }}
-              disabled={!latestEpisode}
-              className="btn-3d-cyan inline-flex items-center gap-3 px-9 py-4 text-sm sm:text-base font-black disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-            >
-              <Play className="w-5 h-5 fill-current" />
-              <span>PLAY LATEST EPISODE</span>
-            </button>
-          </div>
+                <div className="pt-2">
+                  <button
+                    onClick={() => {
+                      if (isMovie) {
+                        const targetEp = latestEpisode || (allEpisodes.length > 0 ? allEpisodes[0] : null);
+                        const epId = targetEp ? targetEp.id : (anime.id || 'movie-ep');
+                        const sId = targetEp ? (targetEp.seasonId || targetEp.season_id || 's1') : 's1';
+                        navigate(`/watch/${anime.id}/${sId}/${epId}`);
+                      } else if (latestEpisode) {
+                        const sId = latestEpisode.seasonId || latestEpisode.season_id || 's1';
+                        navigate(`/watch/${anime.id}/${sId}/${latestEpisode.id}`);
+                      }
+                    }}
+                    disabled={!isMovie && !latestEpisode}
+                    className="btn-3d-cyan inline-flex items-center gap-3 px-9 py-4 text-sm sm:text-base font-black disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <Play className="w-5 h-5 fill-current" />
+                    <span>{isMovie ? 'WATCH MOVIE' : 'PLAY LATEST EPISODE'}</span>
+                  </button>
+                </div>
+              </>
+            );
+          })()}
         </div>
 
         {/* 4. 3D Overview Card */}
@@ -279,117 +310,119 @@ export default function AnimeDetails() {
           </a>
         </div>
 
-        {/* 5. Choose Season & Episodes Grid */}
-        <div className="w-full max-w-5xl">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-            <h2 className="text-2xl sm:text-3xl font-black text-silver-light">Episodes</h2>
+        {/* 5. Choose Season & Episodes Grid (TV Series only) */}
+        {!isMovie && (
+          <div className="w-full max-w-5xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+              <h2 className="text-2xl sm:text-3xl font-black text-silver-light">Episodes</h2>
 
-            {seasons.length > 0 && (
-              <div className="relative w-full sm:w-64 z-20">
-                <button
-                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  onBlur={() => setTimeout(() => setIsDropdownOpen(false), 200)}
-                  className={`w-full flex items-center justify-between bg-[#101624]/90 backdrop-blur-md border ${
-                    isDropdownOpen ? 'border-[#00e5ff] shadow-[0_0_15px_rgba(0,229,255,0.3)]' : 'border-white/10'
-                  } rounded-2xl px-5 py-3.5 text-white font-bold cursor-pointer transition-all duration-300 outline-none`}
-                >
-                  <span className="truncate pr-4">
-                    {seasons.find((s) => s.id === selectedSeason)?.title || 'Choose Season'}
-                  </span>
-                  <ChevronDown
-                    className={`w-5 h-5 shrink-0 transition-transform duration-300 ${
-                      isDropdownOpen ? 'rotate-180 text-brand' : 'text-silver-dark'
+              {seasons.length > 0 && (
+                <div className="relative w-full sm:w-64 z-20">
+                  <button
+                    onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                    onBlur={() => setTimeout(() => setIsDropdownOpen(false), 200)}
+                    className={`w-full flex items-center justify-between bg-[#101624]/90 backdrop-blur-md border ${
+                      isDropdownOpen ? 'border-[#00e5ff] shadow-[0_0_15px_rgba(0,229,255,0.3)]' : 'border-white/10'
+                    } rounded-2xl px-5 py-3.5 text-white font-bold cursor-pointer transition-all duration-300 outline-none`}
+                  >
+                    <span className="truncate pr-4">
+                      {seasons.find((s) => s.id === selectedSeason)?.title || 'Choose Season'}
+                    </span>
+                    <ChevronDown
+                      className={`w-5 h-5 shrink-0 transition-transform duration-300 ${
+                        isDropdownOpen ? 'rotate-180 text-brand' : 'text-silver-dark'
+                      }`}
+                    />
+                  </button>
+
+                  <div
+                    className={`absolute top-full left-0 right-0 mt-2 bg-[#0a0e17]/95 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden shadow-2xl transition-all duration-300 origin-top z-30 ${
+                      isDropdownOpen
+                        ? 'opacity-100 scale-y-100'
+                        : 'opacity-0 scale-y-95 pointer-events-none'
                     }`}
-                  />
-                </button>
-
-                <div
-                  className={`absolute top-full left-0 right-0 mt-2 bg-[#0a0e17]/95 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden shadow-2xl transition-all duration-300 origin-top z-30 ${
-                    isDropdownOpen
-                      ? 'opacity-100 scale-y-100'
-                      : 'opacity-0 scale-y-95 pointer-events-none'
-                  }`}
-                >
-                  <div className="max-h-60 overflow-y-auto custom-scrollbar py-2">
-                    {seasons.map((season) => {
-                      const isSelected = selectedSeason === season.id;
-                      return (
-                        <button
-                          key={season.id}
-                          onClick={() => {
-                            setSelectedSeason(season.id);
-                            setIsDropdownOpen(false);
-                          }}
-                          className={`w-full flex items-center px-5 py-3 text-left font-bold transition-colors cursor-pointer ${
-                            isSelected
-                              ? 'text-[#00e5ff] bg-[#00e5ff]/10'
+                  >
+                    <div className="max-h-60 overflow-y-auto custom-scrollbar py-2">
+                      {seasons.map((season) => {
+                        const isSelected = selectedSeason === season.id;
+                        return (
+                          <button
+                            key={season.id}
+                            onClick={() => {
+                              setSelectedSeason(season.id);
+                              setIsDropdownOpen(false);
+                            }}
+                            className={`w-full flex items-center px-5 py-3 text-left font-bold transition-colors cursor-pointer ${
+                              isSelected
+                                ? 'text-[#00e5ff] bg-[#00e5ff]/10'
                               : 'text-silver hover:text-white hover:bg-white/5'
-                          }`}
-                        >
-                          {season.title}
-                        </button>
-                      );
-                    })}
+                            }`}
+                          >
+                            {season.title}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
+              )}
+            </div>
+
+            {/* 6. Episodes Grid with 3D Hover Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
+              {currentSeasonEpisodes.map((ep) => {
+                const epSeasonId = ep.seasonId || ep.season_id;
+                const currentSeason = seasons.find((s) => s.id === epSeasonId);
+                const seasonNumber = currentSeason?.seasonNumber || ep.seasonNumber || 1;
+
+                return (
+                  <Link
+                    key={ep.id}
+                    to={`/watch/${anime.id}/${epSeasonId || selectedSeason || 's1'}/${ep.id}`}
+                    className="group flex flex-col glass-cyber-card rounded-2xl overflow-hidden border border-white/10 hover:border-[#00e5ff]/70 transition-all duration-300 hover:-translate-y-1.5 hover:shadow-[0_12px_30px_rgba(0,229,255,0.2)]"
+                  >
+                    <div className="relative w-full aspect-video bg-[#0a0e17] overflow-hidden">
+                      <img
+                        src={
+                          ep.thumbnailUrl ||
+                          anime.posterUrl ||
+                          'https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80'
+                        }
+                        alt={ep.title}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90 group-hover:opacity-100"
+                        loading="lazy"
+                      />
+
+                      <div className="absolute top-2 left-2 z-10">
+                        <span className="bg-black/80 backdrop-blur-md text-white text-[10px] font-bold px-2 py-0.5 rounded border border-white/10 shadow-lg">
+                          S{seasonNumber} : EP {ep.episodeNumber}
+                        </span>
+                      </div>
+
+                      <div className="absolute inset-0 bg-black/30 group-hover:bg-black/60 transition-colors flex items-center justify-center">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#00b4d8] to-[#00f0ff] flex items-center justify-center text-black shadow-[0_0_15px_rgba(0,229,255,0.6)] opacity-0 group-hover:opacity-100 scale-75 group-hover:scale-100 transition-all duration-300">
+                          <Play className="w-4 h-4 fill-current ml-0.5" />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-3 flex-1 flex flex-col justify-center bg-[#0a0e17]/80">
+                      <h4 className="text-xs sm:text-sm font-bold text-silver-light line-clamp-2 group-hover:text-brand transition-colors">
+                        {ep.title || `Episode ${ep.episodeNumber}`}
+                      </h4>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+
+            {currentSeasonEpisodes.length === 0 && (
+              <div className="text-center py-16 text-silver-dark glass-cyber-card rounded-3xl border border-white/10 mt-6">
+                <p className="text-base font-semibold">No episodes found for this season.</p>
               </div>
             )}
           </div>
-
-          {/* 6. Episodes Grid with 3D Hover Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
-            {currentSeasonEpisodes.map((ep) => {
-              const epSeasonId = ep.seasonId || ep.season_id;
-              const currentSeason = seasons.find((s) => s.id === epSeasonId);
-              const seasonNumber = currentSeason?.seasonNumber || ep.seasonNumber || 1;
-
-              return (
-                <Link
-                  key={ep.id}
-                  to={`/watch/${anime.id}/${epSeasonId || selectedSeason || 's1'}/${ep.id}`}
-                  className="group flex flex-col glass-cyber-card rounded-2xl overflow-hidden border border-white/10 hover:border-[#00e5ff]/70 transition-all duration-300 hover:-translate-y-1.5 hover:shadow-[0_12px_30px_rgba(0,229,255,0.2)]"
-                >
-                  <div className="relative w-full aspect-video bg-[#0a0e17] overflow-hidden">
-                    <img
-                      src={
-                        ep.thumbnailUrl ||
-                        anime.posterUrl ||
-                        'https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80'
-                      }
-                      alt={ep.title}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90 group-hover:opacity-100"
-                      loading="lazy"
-                    />
-
-                    <div className="absolute top-2 left-2 z-10">
-                      <span className="bg-black/80 backdrop-blur-md text-white text-[10px] font-bold px-2 py-0.5 rounded border border-white/10 shadow-lg">
-                        S{seasonNumber} : EP {ep.episodeNumber}
-                      </span>
-                    </div>
-
-                    <div className="absolute inset-0 bg-black/30 group-hover:bg-black/60 transition-colors flex items-center justify-center">
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#00b4d8] to-[#00f0ff] flex items-center justify-center text-black shadow-[0_0_15px_rgba(0,229,255,0.6)] opacity-0 group-hover:opacity-100 scale-75 group-hover:scale-100 transition-all duration-300">
-                        <Play className="w-4 h-4 fill-current ml-0.5" />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="p-3 flex-1 flex flex-col justify-center bg-[#0a0e17]/80">
-                    <h4 className="text-xs sm:text-sm font-bold text-silver-light line-clamp-2 group-hover:text-brand transition-colors">
-                      {ep.title || `Episode ${ep.episodeNumber}`}
-                    </h4>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-
-          {currentSeasonEpisodes.length === 0 && (
-            <div className="text-center py-16 text-silver-dark glass-cyber-card rounded-3xl border border-white/10 mt-6">
-              <p className="text-base font-semibold">No episodes found for this season.</p>
-            </div>
-          )}
-        </div>
+        )}
       </div>
     </div>
   );

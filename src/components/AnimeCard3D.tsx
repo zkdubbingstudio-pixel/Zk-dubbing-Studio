@@ -63,9 +63,12 @@ export default function AnimeCard3D({
     'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&q=80&w=350&h=500';
 
   const title = anime.title || anime.episodeTitle || 'Untitled Anime';
+  const isMovie = Boolean(anime.type === 'Movie' || anime.contentType === 'Movie' || anime.isMovie);
   const seasonInfo =
     badgeTopLeft ||
-    (anime.SeasonNumber
+    (isMovie
+      ? 'Movie'
+      : anime.SeasonNumber
       ? `Season ${anime.SeasonNumber}`
       : anime.seasonNumber
       ? `Season ${anime.seasonNumber}`
@@ -139,13 +142,17 @@ export default function AnimeCard3D({
               </div>
             )}
 
-            {/* Top Left Badge (Season / Status) */}
+            {/* Top Left Badge (Season / Movie Status) */}
             <div
               className="absolute top-2.5 left-2.5 z-20 transition-transform duration-300"
               style={{ transform: isHovered ? 'translateZ(25px)' : 'translateZ(0px)' }}
             >
-              <span className="inline-flex items-center gap-1 bg-[#05070b]/80 backdrop-blur-md text-white text-[10px] sm:text-xs font-bold px-2.5 py-1 rounded-lg border border-white/10 shadow-lg">
-                <Sparkles className="w-3 h-3 text-[#00e5ff]" />
+              <span className={`inline-flex items-center gap-1 ${
+                isMovie
+                  ? 'bg-[#00e5ff] text-black font-black shadow-[0_0_12px_rgba(0,229,255,0.6)]'
+                  : 'bg-[#05070b]/80 backdrop-blur-md text-white font-bold border border-white/10 shadow-lg'
+              } text-[10px] sm:text-xs px-2.5 py-1 rounded-lg`}>
+                <Sparkles className={`w-3 h-3 ${isMovie ? 'text-black fill-current' : 'text-[#00e5ff]'}`} />
                 {seasonInfo}
               </span>
             </div>

@@ -143,13 +143,8 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
                 loading={isCurrent ? 'eager' : 'lazy'}
               />
 
-              {/* Futuristic Cyber Dark Gradients */}
-              <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-[#05070b]/60 to-transparent" />
-              <div className="absolute inset-0 bg-gradient-to-r from-[#05070b] via-[#05070b]/80 to-transparent" />
-              <div className="absolute inset-0 bg-radial-at-c from-transparent via-black/40 to-[#05070b]" />
-
-              {/* Cyber grid / scanlines subtle texture */}
-              <div className="absolute inset-0 opacity-[0.03] bg-[radial-gradient(#00e5ff_1px,transparent_1px)] [background-size:24px_24px] pointer-events-none" />
+              {/* Light transparent overlay (10% opacity) for text readability with zero dark gradient or corner shadows */}
+              <div className="absolute inset-0 bg-black/10 pointer-events-none" />
             </div>
 
             {/* Parallax Content Overlay */}
@@ -166,26 +161,32 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
               >
                 {/* Futuristic Badges Row */}
                 <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 mb-2">
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#00e5ff]/20 text-[#00e5ff] text-xs font-black backdrop-blur-xl border border-[#00e5ff]/40 shadow-[0_0_15px_rgba(0,229,255,0.4)]">
+                  {(featured.type === 'Movie' || featured.contentType === 'Movie' || featured.isMovie) && (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#00e5ff] text-black text-xs font-black shadow-[0_0_15px_rgba(0,229,255,0.6)]">
+                      MOVIE
+                    </span>
+                  )}
+
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#00e5ff]/25 text-[#00e5ff] text-xs font-black backdrop-blur-md border border-[#00e5ff]/50 shadow-[0_0_15px_rgba(0,229,255,0.4)]">
                     <Volume2 className="w-3.5 h-3.5 animate-pulse" />
                     HINDI DUBBED
                   </span>
 
-                  <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-white/10 text-silver-light text-xs font-bold backdrop-blur-xl border border-white/15">
+                  <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-black/70 text-silver-light text-xs font-bold backdrop-blur-md border border-white/20">
                     <Sparkles className="w-3 h-3 text-[#00e5ff]" />
                     {featured.status || 'Exclusive'}
                   </span>
 
                   {featured.rating && (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-black/60 text-yellow-400 text-xs font-bold border border-yellow-500/30">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-black/75 text-yellow-400 text-xs font-bold border border-yellow-500/40">
                       <Star className="w-3 h-3 fill-yellow-400" />
                       {featured.rating}
                     </span>
                   )}
                 </div>
 
-                {/* Main Anime Title with 3D Holographic Shadow */}
-                <h1 className="text-3xl sm:text-5xl md:text-6xl lg:text-7xl font-black tracking-tight text-white leading-[1.08] drop-shadow-[0_4px_25px_rgba(0,0,0,0.9)]">
+                {/* Main Anime Title with 3D Drop Shadow */}
+                <h1 className="text-3xl sm:text-5xl md:text-6xl lg:text-7xl font-black tracking-tight text-white leading-[1.08] drop-shadow-[0_4px_20px_rgba(0,0,0,0.95)] drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]">
                   {featured.title}
                 </h1>
 
@@ -195,7 +196,7 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
                     {featured.genres.slice(0, 4).map((g: string, i: number) => (
                       <span
                         key={`${g}-${i}`}
-                        className="px-2.5 py-0.5 rounded-md bg-[#101624]/80 text-silver text-[11px] font-semibold border border-white/10"
+                        className="px-2.5 py-0.5 rounded-md bg-[#05070b]/90 text-silver text-[11px] font-semibold border border-white/15 backdrop-blur-sm"
                       >
                         {g}
                       </span>
@@ -204,7 +205,7 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
                 )}
 
                 {/* Description */}
-                <p className="text-sm sm:text-base md:text-lg text-silver/90 line-clamp-2 sm:line-clamp-3 max-w-xl font-normal leading-relaxed drop-shadow-md">
+                <p className="text-sm sm:text-base md:text-lg text-white font-medium line-clamp-2 sm:line-clamp-3 max-w-xl leading-relaxed drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)]">
                   {featured.description}
                 </p>
 
@@ -218,7 +219,11 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
                     className="btn-3d-cyan flex items-center gap-2.5 px-7 sm:px-9 py-3.5 sm:py-4 text-sm sm:text-base font-black cursor-pointer group/btn"
                   >
                     <Play className="w-5 h-5 fill-current transition-transform group-hover/btn:scale-110" />
-                    <span>WATCH NOW</span>
+                    <span>
+                      {(featured.type === 'Movie' || featured.contentType === 'Movie' || featured.isMovie)
+                        ? 'WATCH MOVIE'
+                        : 'WATCH NOW'}
+                    </span>
                   </button>
 
                   <Link

@@ -188,7 +188,9 @@ export default function AdminAnime() {
   };
 
   const openEdit = (anime: any) => {
+    const isMovieType = anime.type === 'Movie' || anime.contentType === 'Movie' || anime.isMovie;
     setTitle(anime.title || '');
+    setContentType(isMovieType ? 'Movie' : 'TV Series');
     setDescription(anime.description || anime.synopsis || '');
     setPosterUrl(anime.posterUrl || anime.poster_url || '');
     setBannerUrl(anime.bannerUrl || anime.banner_url || '');
@@ -196,10 +198,15 @@ export default function AdminAnime() {
     setLanguage(anime.language || 'Hindi Dubbed');
     setRating(String(anime.rating || '8.5/10'));
     setReleaseYear(String(anime.releaseYear || anime.release_year || '2024'));
+    setReleaseDate(anime.releaseDate || anime.release_date || '');
+    setDuration(anime.duration || (isMovieType ? '1h 45m' : '24m'));
     setStatus(anime.status || 'Ongoing');
     setDubbedBy(anime.dubbedBy || anime.dubbed_by || 'ZK Dubbing Studio');
     setFeatured(Boolean(anime.featured));
     setTrending(Boolean(anime.trending));
+    setServer1Url(anime.server1Url || anime.server1_url || anime.abyssUrl || anime.abyss_url || '');
+    setServer2Url(anime.server2Url || anime.server2_url || anime.filemoonUrl || anime.filemoon_url || '');
+    setServer3Url(anime.server3Url || anime.server3_url || anime.vdohideUrl || anime.vdohide_url || '');
     setEditingId(anime.id);
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -207,6 +214,7 @@ export default function AdminAnime() {
 
   const resetForm = () => {
     setTitle('');
+    setContentType('TV Series');
     setDescription('');
     setPosterUrl('');
     setBannerUrl('');
@@ -214,10 +222,15 @@ export default function AdminAnime() {
     setLanguage('Hindi Dubbed');
     setRating('8.5/10');
     setReleaseYear('2024');
+    setReleaseDate('');
+    setDuration('1h 45m');
     setStatus('Ongoing');
     setDubbedBy('ZK Dubbing Studio');
     setFeatured(false);
     setTrending(false);
+    setServer1Url('');
+    setServer2Url('');
+    setServer3Url('');
     setEditingId(null);
   };
 
@@ -245,6 +258,7 @@ export default function AdminAnime() {
 
   // Filter & Search Logic
   const filteredAnime = animeList.filter(anime => {
+    const isMovieItem = anime.type === 'Movie' || anime.contentType === 'Movie' || anime.isMovie;
     const matchesSearch = 
       anime.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       anime.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -264,7 +278,11 @@ export default function AdminAnime() {
       (anime.language || 'Hindi Dubbed').toLowerCase().includes(selectedLanguage.toLowerCase()) ||
       (anime.dubbedBy && anime.dubbedBy.toLowerCase().includes(selectedLanguage.toLowerCase()));
 
-    return matchesSearch && matchesGenre && matchesStatus && matchesLanguage;
+    const matchesType = 
+      selectedContentType === 'All' || 
+      (selectedContentType === 'Movie' ? isMovieItem : !isMovieItem);
+
+    return matchesSearch && matchesGenre && matchesStatus && matchesLanguage && matchesType;
   });
 
   if (loading) {

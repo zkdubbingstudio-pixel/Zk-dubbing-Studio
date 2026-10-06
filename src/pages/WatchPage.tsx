@@ -80,6 +80,13 @@ export default function WatchPage() {
   }, [paramId, episode]);
 
   // Next / Prev Episode Logic
+  const isMovie = Boolean(
+    anime?.isMovie ||
+    anime?.type === 'Movie' ||
+    anime?.contentType === 'Movie' ||
+    episode?.seasonId === 'movie' ||
+    episode?.type === 'Movie'
+  );
   const activeEpisodeId = episode?.id || paramId;
   const currentIndex = seasonEpisodes.findIndex(ep => ep.id === activeEpisodeId);
   const prevEpisode = currentIndex > 0 ? seasonEpisodes[currentIndex - 1] : null;
@@ -359,13 +366,29 @@ export default function WatchPage() {
                   <h1 className="text-2xl md:text-3xl font-bold text-white mb-2">{anime.title}</h1>
                 )}
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="bg-brand text-black text-xs font-bold px-2 py-1 rounded shadow-[0_0_10px_rgba(0,229,255,0.3)]">
-                    Season {seasons.find(s => s.id === episode.seasonId)?.seasonNumber || episode.seasonNumber || 1}
-                  </span>
-                  <span className="bg-white/10 text-white text-xs font-bold px-2 py-1 rounded border border-white/10">
-                    Episode {episode.episodeNumber}
-                  </span>
-                  <span className="text-white/70 text-sm font-medium ml-2">{episode.title || `Episode ${episode.episodeNumber}`}</span>
+                  {isMovie ? (
+                    <>
+                      <span className="bg-brand text-black text-xs font-black px-2.5 py-1 rounded shadow-[0_0_10px_rgba(0,229,255,0.4)]">
+                        MOVIE
+                      </span>
+                      {anime?.duration && (
+                        <span className="bg-white/10 text-white text-xs font-bold px-2 py-1 rounded border border-white/10">
+                          {anime.duration} min
+                        </span>
+                      )}
+                      <span className="text-white/70 text-sm font-medium ml-2">{anime?.title || episode?.title}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="bg-brand text-black text-xs font-bold px-2 py-1 rounded shadow-[0_0_10px_rgba(0,229,255,0.3)]">
+                        Season {seasons.find(s => s.id === episode.seasonId)?.seasonNumber || episode.seasonNumber || 1}
+                      </span>
+                      <span className="bg-white/10 text-white text-xs font-bold px-2 py-1 rounded border border-white/10">
+                        Episode {episode.episodeNumber}
+                      </span>
+                      <span className="text-white/70 text-sm font-medium ml-2">{episode.title || `Episode ${episode.episodeNumber}`}</span>
+                    </>
+                  )}
                 </div>
              </div>
 
@@ -510,41 +533,43 @@ export default function WatchPage() {
                </div>
              )}
 
-             {/* Controls Below Server Selector (Previous / Next) */}
-             <div className="mt-5 flex flex-col sm:flex-row justify-between items-center gap-4">
-                <div className="flex items-center gap-3 w-full sm:w-auto justify-center sm:justify-start">
-                  {prevEpisode ? (
-                    <button 
-                      onClick={() => {
-                        const sId = prevEpisode.seasonId || prevEpisode.season_id || 's1';
-                        navigate(anime ? `/watch/${anime.id}/${sId}/${prevEpisode.id}` : `/watch/${prevEpisode.id}`);
-                      }} 
-                      className="flex items-center gap-1 text-sm font-bold text-white/70 hover:text-brand bg-white/5 border border-white/10 px-4 py-2 rounded-lg transition-colors cursor-pointer"
-                    >
-                      <SkipBack className="w-4 h-4" /> Previous
-                    </button>
-                  ) : (
-                    <button disabled className="flex items-center gap-1 text-sm font-bold text-white/30 bg-white/5 border border-white/5 px-4 py-2 rounded-lg cursor-not-allowed">
-                      <SkipBack className="w-4 h-4" /> Previous
-                    </button>
-                  )}
-                  {nextEpisode ? (
-                    <button 
-                      onClick={() => {
-                        const sId = nextEpisode.seasonId || nextEpisode.season_id || 's1';
-                        navigate(anime ? `/watch/${anime.id}/${sId}/${nextEpisode.id}` : `/watch/${nextEpisode.id}`);
-                      }} 
-                      className="flex items-center gap-1 text-sm font-bold text-black bg-brand px-6 py-2 rounded-lg hover:bg-brand-hover transition-colors shadow-[0_0_15px_rgba(0,229,255,0.4)] cursor-pointer"
-                    >
-                      Next <SkipForward className="w-4 h-4" />
-                    </button>
-                  ) : (
-                    <button disabled className="flex items-center gap-1 text-sm font-bold text-white/30 bg-white/5 border border-white/5 px-6 py-2 rounded-lg cursor-not-allowed">
-                      Next <SkipForward className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-             </div>
+             {/* Controls Below Server Selector (Previous / Next for TV Series) */}
+             {!isMovie && (
+               <div className="mt-5 flex flex-col sm:flex-row justify-between items-center gap-4">
+                  <div className="flex items-center gap-3 w-full sm:w-auto justify-center sm:justify-start">
+                    {prevEpisode ? (
+                      <button 
+                        onClick={() => {
+                          const sId = prevEpisode.seasonId || prevEpisode.season_id || 's1';
+                          navigate(anime ? `/watch/${anime.id}/${sId}/${prevEpisode.id}` : `/watch/${prevEpisode.id}`);
+                        }} 
+                        className="flex items-center gap-1 text-sm font-bold text-white/70 hover:text-brand bg-white/5 border border-white/10 px-4 py-2 rounded-lg transition-colors cursor-pointer"
+                      >
+                        <SkipBack className="w-4 h-4" /> Previous
+                      </button>
+                    ) : (
+                      <button disabled className="flex items-center gap-1 text-sm font-bold text-white/30 bg-white/5 border border-white/5 px-4 py-2 rounded-lg cursor-not-allowed">
+                        <SkipBack className="w-4 h-4" /> Previous
+                      </button>
+                    )}
+                    {nextEpisode ? (
+                      <button 
+                        onClick={() => {
+                          const sId = nextEpisode.seasonId || nextEpisode.season_id || 's1';
+                          navigate(anime ? `/watch/${anime.id}/${sId}/${nextEpisode.id}` : `/watch/${nextEpisode.id}`);
+                        }} 
+                        className="flex items-center gap-1 text-sm font-bold text-black bg-brand px-6 py-2 rounded-lg hover:bg-brand-hover transition-colors shadow-[0_0_15px_rgba(0,229,255,0.4)] cursor-pointer"
+                      >
+                        Next <SkipForward className="w-4 h-4" />
+                      </button>
+                    ) : (
+                      <button disabled className="flex items-center gap-1 text-sm font-bold text-white/30 bg-white/5 border border-white/5 px-6 py-2 rounded-lg cursor-not-allowed">
+                        Next <SkipForward className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+               </div>
+             )}
 
              {episode.description && (
                <div className="mt-8 bg-white/5 border border-white/10 rounded-xl p-4 md:p-6">
@@ -558,59 +583,61 @@ export default function WatchPage() {
         </div>
       </div>
 
-      {/* Episodes Grid Section Below Player */}
-      <div className="max-w-6xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 pb-20">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <h2 className="text-2xl md:text-3xl font-bold text-white">Episodes</h2>
-        </div>
+      {/* Episodes Grid Section Below Player (TV Series only) */}
+      {!isMovie && (
+        <div className="max-w-6xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 pb-20">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+            <h2 className="text-2xl md:text-3xl font-bold text-white">Episodes</h2>
+          </div>
 
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2 md:gap-4">
-          {seasonEpisodes.map((ep) => {
-            const epSeasonId = ep.seasonId || ep.season_id;
-            const currentSeason = seasons.find(s => s.id === epSeasonId);
-            const seasonNumber = currentSeason?.seasonNumber || ep.seasonNumber || 1;
-            const isCurrent = ep.id === activeEpisodeId;
-            
-            return (
-              <Link 
-                key={ep.id} 
-                to={anime ? `/watch/${anime.id}/${epSeasonId || 's1'}/${ep.id}` : `/watch/${ep.id}`} 
-                className={`group flex flex-col rounded-[12px] overflow-hidden border transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_10px_30px_rgba(0,229,255,0.1)] ${isCurrent ? 'bg-brand/10 border-brand/50 shadow-[0_0_15px_rgba(0,229,255,0.15)]' : 'bg-white/5 border-white/10 hover:border-brand/50'}`}
-              >
-                <div className="relative w-full aspect-video bg-black/50 overflow-hidden">
-                  <img 
-                    src={ep.thumbnailUrl || anime?.posterUrl || "https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80"} 
-                    alt={ep.title} 
-                    className={`w-full h-full object-cover transition-transform duration-500 opacity-90 group-hover:scale-105 group-hover:opacity-100 ${isCurrent ? 'opacity-100 scale-105' : ''}`} 
-                    loading="lazy"
-                  />
-                  <div className="absolute top-1 left-1 z-10">
-                    <span className="bg-black/80 backdrop-blur-md text-white text-[10px] md:text-xs font-bold px-1.5 py-0.5 rounded border border-white/10 shadow-lg">
-                      {seasonNumber}x{ep.episodeNumber}
-                    </span>
-                  </div>
-                  <div className="absolute inset-0 bg-black/20 group-hover:bg-black/60 transition-colors flex items-center justify-center">
-                    <div className={`w-8 h-8 md:w-12 md:h-12 rounded-full bg-brand flex items-center justify-center text-black pl-0.5 md:pl-1 shadow-[0_0_20px_rgba(0,229,255,0.4)] transition-all duration-300 ${isCurrent ? 'opacity-100 scale-100' : 'opacity-0 scale-75 group-hover:opacity-100 group-hover:scale-100'}`}>
-                      <Play className="w-4 h-4 md:w-6 md:h-6 fill-current" />
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2 md:gap-4">
+            {seasonEpisodes.map((ep) => {
+              const epSeasonId = ep.seasonId || ep.season_id;
+              const currentSeason = seasons.find(s => s.id === epSeasonId);
+              const seasonNumber = currentSeason?.seasonNumber || ep.seasonNumber || 1;
+              const isCurrent = ep.id === activeEpisodeId;
+              
+              return (
+                <Link 
+                  key={ep.id} 
+                  to={anime ? `/watch/${anime.id}/${epSeasonId || 's1'}/${ep.id}` : `/watch/${ep.id}`} 
+                  className={`group flex flex-col rounded-[12px] overflow-hidden border transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_10px_30px_rgba(0,229,255,0.1)] ${isCurrent ? 'bg-brand/10 border-brand/50 shadow-[0_0_15px_rgba(0,229,255,0.15)]' : 'bg-white/5 border-white/10 hover:border-brand/50'}`}
+                >
+                  <div className="relative w-full aspect-video bg-black/50 overflow-hidden">
+                    <img 
+                      src={ep.thumbnailUrl || anime?.posterUrl || "https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80"} 
+                      alt={ep.title} 
+                      className={`w-full h-full object-cover transition-transform duration-500 opacity-90 group-hover:scale-105 group-hover:opacity-100 ${isCurrent ? 'opacity-100 scale-105' : ''}`} 
+                      loading="lazy"
+                    />
+                    <div className="absolute top-1 left-1 z-10">
+                      <span className="bg-black/80 backdrop-blur-md text-white text-[10px] md:text-xs font-bold px-1.5 py-0.5 rounded border border-white/10 shadow-lg">
+                        {seasonNumber}x{ep.episodeNumber}
+                      </span>
+                    </div>
+                    <div className="absolute inset-0 bg-black/20 group-hover:bg-black/60 transition-colors flex items-center justify-center">
+                      <div className={`w-8 h-8 md:w-12 md:h-12 rounded-full bg-brand flex items-center justify-center text-black pl-0.5 md:pl-1 shadow-[0_0_20px_rgba(0,229,255,0.4)] transition-all duration-300 ${isCurrent ? 'opacity-100 scale-100' : 'opacity-0 scale-75 group-hover:opacity-100 group-hover:scale-100'}`}>
+                        <Play className="w-4 h-4 md:w-6 md:h-6 fill-current" />
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="p-2 md:p-3 flex-1 flex flex-col justify-center">
-                  <h4 className={`text-[10px] md:text-sm font-bold line-clamp-2 transition-colors ${isCurrent ? 'text-brand' : 'text-white group-hover:text-brand'}`}>
-                    {ep.title || `Episode ${ep.episodeNumber}`}
-                  </h4>
-                </div>
-              </Link>
-            );
-          })}
-        </div>
-        
-        {seasonEpisodes.length === 0 && (
-          <div className="text-center py-16 text-white/50 bg-white/5 rounded-3xl border border-white/10 mt-6">
-            <p className="text-lg">No episodes found.</p>
+                  <div className="p-2 md:p-3 flex-1 flex flex-col justify-center">
+                    <h4 className={`text-[10px] md:text-sm font-bold line-clamp-2 transition-colors ${isCurrent ? 'text-brand' : 'text-white group-hover:text-brand'}`}>
+                      {ep.title || `Episode ${ep.episodeNumber}`}
+                    </h4>
+                  </div>
+                </Link>
+              );
+            })}
           </div>
-        )}
-      </div>
+          
+          {seasonEpisodes.length === 0 && (
+            <div className="text-center py-16 text-white/50 bg-white/5 rounded-3xl border border-white/10 mt-6">
+              <p className="text-lg">No episodes found.</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
