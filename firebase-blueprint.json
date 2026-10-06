@@ -1,0 +1,64 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Registered user profile with role, email, and preferences",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "createdAt": { "type": "number" },
+        "lastLoginAt": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Anime": {
+      "title": "Anime",
+      "description": "Anime title details, metadata and media assets",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "posterUrl": { "type": "string" },
+        "bannerUrl": { "type": "string" },
+        "genres": { "type": "array" },
+        "rating": { "type": "string" },
+        "type": { "type": "string" },
+        "contentType": { "type": "string" }
+      },
+      "required": ["title"]
+    },
+    "Episode": {
+      "title": "Episode",
+      "description": "Single episode with streaming server URLs",
+      "type": "object",
+      "properties": {
+        "animeId": { "type": "string" },
+        "seasonId": { "type": "string" },
+        "episodeNumber": { "type": "number" },
+        "title": { "type": "string" },
+        "server1Url": { "type": "string" },
+        "server2Url": { "type": "string" },
+        "server3Url": { "type": "string" }
+      },
+      "required": ["animeId", "episodeNumber"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles indexed by UID"
+    },
+    "/anime/{animeId}": {
+      "schema": "Anime",
+      "description": "Anime series and movies collection"
+    },
+    "/episodes/{episodeId}": {
+      "schema": "Episode",
+      "description": "Anime episodes collection"
+    }
+  }
+}

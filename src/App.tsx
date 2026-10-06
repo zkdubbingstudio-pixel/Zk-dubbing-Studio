@@ -8,6 +8,8 @@ import { supabase } from './lib/supabase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from './lib/firebase';
 import { useAuthStore } from './store/authStore';
+import { saveUserToFirestore, processRedirectResult, getFriendlyAuthErrorMessage, isAuthorizedAdmin } from './lib/authService';
+import { User } from './types';
 
 import RootLayout from './layouts/RootLayout';
 import AdminLayout from './layouts/AdminLayout';
@@ -43,61 +45,59 @@ function PageFallback() {
 }
 
 export default function App() {
-  const { setFirebaseUser, setUser, setLoading } = useAuthStore();
+  const { setFirebaseUser, setUser, setLoading, setAuthError, setAuthSuccessMessage } = useAuthStore();
 
   useEffect(() => {
+    // 1. Process redirect result if returning from mobile Google Sign-In redirect flow
+    processRedirectResult()
+      .then((userRecord) => {
+        if (userRecord) {
+          setUser(userRecord);
+          setAuthSuccessMessage(`Welcome back, ${userRecord.displayName || userRecord.email}!`);
+        }
+      })
+      .catch((err: any) => {
+        if (err?.code !== 'auth/popup-closed-by-user') {
+          const msg = getFriendlyAuthErrorMessage(err);
+          setAuthError(msg);
+        }
+      });
+
+    // 2. Listen for auth changes, persist session, and sync user document to Firestore
+    if (!auth) {
+      setLoading(false);
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        setLoading(true);
         setFirebaseUser(firebaseUser);
-        
         try {
-          const { data: userSnap } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', firebaseUser.uid)
-            .single();
-            
-          if (userSnap) {
-            setUser({
-              uid: userSnap.id,
-              email: userSnap.email,
-              displayName: userSnap.username,
-              photoURL: firebaseUser.photoURL || '',
-              role: userSnap.role,
-              createdAt: userSnap.created_at ? new Date(userSnap.created_at).getTime() : Date.now(),
-              settings: userSnap.settings
-            });
-          } else {
-            const newUser = {
-              id: firebaseUser.uid,
-              email: firebaseUser.email || '',
-              username: firebaseUser.displayName || 'Anime Fan',
-              role: firebaseUser.email === 'zkdubbingstudio@gmail.com' ? 'admin' : 'user',
-              created_at: new Date().toISOString()
-            };
-            
-            await supabase.from('users').insert([newUser]);
-            setUser({ 
-              uid: newUser.id, 
-              email: newUser.email, 
-              displayName: newUser.username, 
-              photoURL: firebaseUser.photoURL || '', 
-              role: newUser.role as 'user' | 'admin',
-              createdAt: Date.now() 
-            });
-          }
-        } catch {
-          setUser({
+          const userRecord = await saveUserToFirestore(firebaseUser);
+          setUser(userRecord);
+        } catch (err) {
+          console.error('Error saving user to Firestore:', err);
+          const email = (firebaseUser.email || '').toLowerCase();
+          const fallbackUser: User = {
             uid: firebaseUser.uid,
-            email: firebaseUser.email || '',
-            displayName: firebaseUser.displayName || 'Anime Fan',
+            id: firebaseUser.uid,
+            email,
+            displayName: firebaseUser.displayName || email.split('@')[0] || 'Anime Fan',
             photoURL: firebaseUser.photoURL || '',
-            role: firebaseUser.email === 'zkdubbingstudio@gmail.com' ? 'admin' : 'user',
+            role: isAuthorizedAdmin(email) ? 'admin' : 'user',
             createdAt: Date.now(),
-          });
+            settings: {
+              appearance: 'Dark',
+              defaultQuality: '1080p',
+              autoplayNext: true,
+              rememberPosition: true,
+              newEpisodeNotifications: true,
+            },
+          };
+          setUser(fallbackUser);
+        } finally {
+          setLoading(false);
         }
-        setLoading(false);
       } else {
         setFirebaseUser(null);
         setUser(null);
@@ -106,7 +106,7 @@ export default function App() {
     });
 
     return () => unsubscribe();
-  }, [setFirebaseUser, setUser, setLoading]);
+  }, [setFirebaseUser, setUser, setLoading, setAuthError]);
 
   return (
     <BrowserRouter>

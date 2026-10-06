@@ -1,8 +1,7 @@
 import { useAuthStore } from '../store/authStore';
 import { LogOut, Settings, Clock, Heart, Shield } from 'lucide-react';
 import { Navigate, Link, useNavigate } from 'react-router-dom';
-import { auth } from '../lib/firebase';
-import { signOut } from 'firebase/auth';
+import { signOutUser, isAuthorizedAdmin } from '../lib/authService';
 
 export default function Profile() {
   const { user, firebaseUser, loading } = useAuthStore();
@@ -12,7 +11,7 @@ export default function Profile() {
   if (!user || !firebaseUser) return <Navigate to="/" replace />;
 
   const handleLogout = async () => {
-    await signOut(auth);
+    await signOutUser();
     navigate('/');
   };
 
@@ -25,16 +24,16 @@ export default function Profile() {
           <div className="glass-panel rounded-lg p-6 flex flex-col items-center text-center">
             <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-brand mb-4">
               <img 
-                src={firebaseUser.photoURL || undefined || `https://ui-avatars.com/api/?name=${firebaseUser.displayName}`} 
+                src={firebaseUser.photoURL || undefined || `https://ui-avatars.com/api/?name=${encodeURIComponent(firebaseUser.displayName || 'User')}`} 
                 alt="Profile" 
                 className="w-full h-full object-cover"
               />
             </div>
-            <h2 className="text-xl font-bold">{firebaseUser.displayName}</h2>
+            <h2 className="text-xl font-bold">{firebaseUser.displayName || 'Anime Fan'}</h2>
             <p className="text-sm text-white/50 mb-6">{firebaseUser.email}</p>
             
             <div className="w-full space-y-2 border-t border-white/10 pt-6">
-              {user.email === 'zkdubbingstudio@gmail.com' && (
+              {isAuthorizedAdmin(user.email) && (
                 <Link to="/admin" className="w-full flex items-center justify-between px-4 py-3 bg-brand/10 hover:bg-brand/20 border border-brand/20 rounded transition-colors text-sm text-brand font-bold shadow-[0_0_15px_rgba(0,229,255,0.1)]">
                   <span className="flex items-center gap-2"><Shield className="w-5 h-5" /> Admin Panel</span>
                 </Link>

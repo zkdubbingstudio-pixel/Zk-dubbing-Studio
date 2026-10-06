@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { Navigate, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import {
   User,
   Settings as SettingsIcon,
@@ -56,11 +58,26 @@ export default function Settings() {
         settings
       };
       
-      await supabase.from('users').update({
-        displayName,
-        photoURL,
-        settings
-      }).eq('id', user.uid);
+      // 1. Sync to Firestore
+      try {
+        await setDoc(doc(db, 'users', user.uid), {
+          displayName,
+          photoURL,
+          settings,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      } catch (fsErr) {
+        console.warn('Could not update Firestore settings:', fsErr);
+      }
+
+      // 2. Sync to Supabase
+      try {
+        await supabase.from('users').update({
+          displayName,
+          photoURL,
+          settings
+        }).eq('id', user.uid);
+      } catch {}
       
       setUser(updatedUser);
       setSaveSuccess(true);

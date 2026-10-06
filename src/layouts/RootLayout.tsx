@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { Search, Menu, X, LogOut, Shield, User, Sliders } from 'lucide-react';
+import { Search, Menu, X, LogOut, Shield, User, Sliders, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
-import { auth, googleProvider, browserPopupRedirectResolver } from '../lib/firebase';
-import { signInWithPopup, signOut } from 'firebase/auth';
+import { signInWithGoogle, signOutUser, getFriendlyAuthErrorMessage } from '../lib/authService';
 import Logo3D from '../components/Logo3D';
 import CyberParticles from '../components/CyberParticles';
 import Footer from '../components/Footer';
@@ -11,13 +10,24 @@ import Footer from '../components/Footer';
 export default function RootLayout() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const { user, firebaseUser } = useAuthStore();
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const { user, firebaseUser, authError, setAuthError, authSuccessMessage, setAuthSuccessMessage } = useAuthStore();
   const location = useLocation();
 
   // Scroll to top on route change
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [location.pathname]);
+
+  // Auto-dismiss auth success message
+  useEffect(() => {
+    if (authSuccessMessage) {
+      const timer = setTimeout(() => {
+        setAuthSuccessMessage(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [authSuccessMessage, setAuthSuccessMessage]);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -27,21 +37,29 @@ export default function RootLayout() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  const handleLogin = async () => {
+  const handleLogin = async (preferRedirect = false) => {
+    setIsLoggingIn(true);
+    setAuthError(null);
     try {
-      await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
+      const loggedUser = await signInWithGoogle({ preferRedirect });
+      if (loggedUser) {
+        setAuthSuccessMessage(`Welcome back, ${loggedUser.displayName || loggedUser.email}!`);
+      }
     } catch (error: any) {
       if (error?.code !== 'auth/popup-closed-by-user') {
-        console.error('Error signing in with Google', error);
+        const friendlyMsg = getFriendlyAuthErrorMessage(error);
+        setAuthError(friendlyMsg);
       }
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
-    } catch (error) {
-      console.error('Error signing out', error);
+      await signOutUser();
+    } catch (error: any) {
+      setAuthError(getFriendlyAuthErrorMessage(error));
     }
   };
 
@@ -53,6 +71,81 @@ export default function RootLayout() {
       {/* Cyber Ambient Background Glows */}
       <div className="fixed top-0 left-1/4 w-96 h-96 bg-[#00e5ff]/5 rounded-full blur-[120px] pointer-events-none z-0" />
       <div className="fixed bottom-0 right-1/4 w-96 h-96 bg-[#0077b6]/5 rounded-full blur-[140px] pointer-events-none z-0" />
+
+      {/* Signing In Loading Overlay Indicator */}
+      {isLoggingIn && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[80] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0a0e17]/95 border border-[#00e5ff]/50 rounded-2xl p-6 sm:p-8 shadow-[0_0_50px_rgba(0,229,255,0.3)] flex flex-col items-center max-w-sm text-center">
+            <div className="relative mb-4">
+              <div className="w-14 h-14 border-3 border-white/10 border-t-[#00e5ff] rounded-full animate-spin shadow-[0_0_25px_rgba(0,229,255,0.6)]" />
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#00e5ff] animate-ping" />
+              </div>
+            </div>
+            <h3 className="text-base font-black text-white mb-1 tracking-tight">Authenticating with Google</h3>
+            <p className="text-xs text-silver-light">Connecting to ZK Voice Hub securely...</p>
+            <p className="text-[11px] text-[#00e5ff]/70 mt-3 font-mono">Verifying Firebase Credentials</p>
+          </div>
+        </div>
+      )}
+
+      {/* Global Auth Success Toast Notification */}
+      {authSuccessMessage && (
+        <div className="fixed top-20 sm:top-24 left-1/2 -translate-x-1/2 w-11/12 max-w-lg z-[70] animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="bg-[#051a14]/95 border border-emerald-500/60 rounded-2xl p-4 shadow-[0_0_35px_rgba(16,185,129,0.35)] backdrop-blur-xl flex items-center gap-3.5">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.3)]">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h4 className="text-xs font-black text-emerald-300 uppercase tracking-widest mb-0.5">
+                Authentication Successful
+              </h4>
+              <p className="text-xs text-white/95 font-semibold break-words">
+                {authSuccessMessage}
+              </p>
+            </div>
+            <button
+              onClick={() => setAuthSuccessMessage(null)}
+              className="p-1 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+              aria-label="Dismiss message"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Global Auth Error Alert Notification */}
+      {authError && (
+        <div className="fixed top-20 sm:top-24 left-1/2 -translate-x-1/2 w-11/12 max-w-2xl z-[60] animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="bg-[#120a14]/95 border border-red-500/50 rounded-2xl p-4 shadow-[0_0_30px_rgba(239,68,68,0.3)] backdrop-blur-xl flex items-start gap-3.5">
+            <div className="w-8 h-8 rounded-xl bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 shrink-0 mt-0.5">
+              <AlertTriangle className="w-4 h-4" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h4 className="text-sm font-bold text-white mb-0.5 flex items-center gap-2">
+                Google Sign-In Alert
+              </h4>
+              <p className="text-xs text-red-200/90 leading-relaxed break-words">
+                {authError}
+              </p>
+              {authError.includes('Authorized Domains') && (
+                <div className="mt-2.5 pt-2 border-t border-red-500/20 text-[11px] text-white/70">
+                  <span className="font-bold text-brand">Action Required: </span>
+                  Go to <a href="https://console.firebase.google.com" target="_blank" rel="noreferrer" className="underline text-brand hover:text-white">Firebase Console</a> → Authentication → Settings → Authorized Domains → Add <code className="bg-black/60 px-1.5 py-0.5 rounded text-white border border-white/10 font-bold">{typeof window !== 'undefined' ? window.location.hostname : 'domain'}</code>
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => setAuthError(null)}
+              className="p-1 rounded-lg text-white/40 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+              aria-label="Dismiss error"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Floating 3D Cyber Navbar */}
       <header
@@ -148,10 +241,11 @@ export default function RootLayout() {
                 </div>
               ) : (
                 <button
-                  onClick={handleLogin}
-                  className="btn-3d-cyan px-6 py-2.5 text-xs sm:text-sm font-black tracking-wider cursor-pointer"
+                  onClick={() => handleLogin(false)}
+                  disabled={isLoggingIn}
+                  className="btn-3d-cyan px-6 py-2.5 text-xs sm:text-sm font-black tracking-wider cursor-pointer disabled:opacity-50"
                 >
-                  SIGN IN
+                  {isLoggingIn ? 'SIGNING IN...' : 'SIGN IN'}
                 </button>
               )}
             </div>
@@ -204,15 +298,27 @@ export default function RootLayout() {
 
               <div className="pt-2 border-t border-white/10">
                 {!firebaseUser ? (
-                  <button
-                    onClick={() => {
-                      handleLogin();
-                      setMobileMenuOpen(false);
-                    }}
-                    className="w-full btn-3d-cyan py-3 text-sm font-black text-center mt-2 cursor-pointer"
-                  >
-                    SIGN IN WITH GOOGLE
-                  </button>
+                  <div className="space-y-2 mt-2">
+                    <button
+                      onClick={() => {
+                        handleLogin(false);
+                        setMobileMenuOpen(false);
+                      }}
+                      disabled={isLoggingIn}
+                      className="w-full btn-3d-cyan py-3 text-sm font-black text-center cursor-pointer disabled:opacity-50"
+                    >
+                      {isLoggingIn ? 'SIGNING IN...' : 'SIGN IN WITH GOOGLE'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        handleLogin(true);
+                        setMobileMenuOpen(false);
+                      }}
+                      className="w-full py-2 text-xs font-bold text-silver-dark hover:text-brand text-center bg-white/5 rounded-xl border border-white/5 transition-colors"
+                    >
+                      Android / Mobile Redirect Mode
+                    </button>
+                  </div>
                 ) : (
                   <div className="space-y-2 pt-1">
                     <Link

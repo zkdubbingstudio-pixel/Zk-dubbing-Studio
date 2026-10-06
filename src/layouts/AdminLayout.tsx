@@ -4,10 +4,16 @@ import { useNavigate, Outlet, Link, useLocation } from 'react-router-dom';
 import { 
   ShieldAlert, LayoutDashboard, Film, Layers, PlaySquare, Home, Users, LogOut, 
   FolderOpen, TrendingUp, Settings, Lock, Plus, X, Sparkles, ExternalLink, 
-  CheckCircle2, Bell, Menu, ShieldCheck, ChevronRight, Zap, RefreshCw, HardDrive
+  CheckCircle2, Bell, Menu, ShieldCheck, ChevronRight, Zap, RefreshCw, HardDrive,
+  AlertTriangle
 } from 'lucide-react';
-import { signOut, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
-import { auth, browserPopupRedirectResolver } from '../lib/firebase';
+import { 
+  signInWithGoogle, 
+  signOutUser, 
+  isAuthorizedAdmin, 
+  PRIMARY_ADMIN_EMAIL, 
+  getFriendlyAuthErrorMessage 
+} from '../lib/authService';
 import { logAdminActivity } from '../lib/activityLogger';
 
 const navItems = [
@@ -23,7 +29,7 @@ const navItems = [
 ];
 
 export default function AdminLayout() {
-  const { user, loading, setUser } = useAuthStore();
+  const { user, loading, setUser, authSuccessMessage, setAuthSuccessMessage } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -37,43 +43,40 @@ export default function AdminLayout() {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
-  const isAdmin = user && user.email === 'zkdubbingstudio@gmail.com';
+  // Auto-dismiss auth success message
+  useEffect(() => {
+    if (authSuccessMessage) {
+      const timer = setTimeout(() => {
+        setAuthSuccessMessage(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [authSuccessMessage, setAuthSuccessMessage]);
 
-  const handleAdminGoogleLogin = async () => {
+  const isAdmin = Boolean(user && isAuthorizedAdmin(user.email));
+
+  const handleAdminGoogleLogin = async (preferRedirect = false) => {
     setIsSigningIn(true);
     setAuthError(null);
     try {
-      const provider = new GoogleAuthProvider();
-      const res = await signInWithPopup(auth, provider, browserPopupRedirectResolver);
-      if (res.user) {
-        logAdminActivity('Admin Logged In via Google', 'security', `Account: ${res.user.email}`);
+      const loggedUser = await signInWithGoogle({ preferRedirect });
+      if (loggedUser) {
+        logAdminActivity('Admin Logged In via Google', 'security', `Account: ${loggedUser.email}`);
+        setAuthSuccessMessage(`Administrator access verified for ${loggedUser.email}`);
       }
     } catch (err: any) {
       if (err?.code !== 'auth/popup-closed-by-user') {
-        setAuthError(err.message || 'Login failed. Please try again.');
+        const msg = getFriendlyAuthErrorMessage(err);
+        setAuthError(msg);
       }
     } finally {
       setIsSigningIn(false);
     }
   };
 
-  const handleQuickAdminDemoAccess = () => {
-    // Allows instant developer/admin access simulation for zkdubbingstudio@gmail.com
-    const adminUser = {
-      uid: 'admin-zk-super',
-      email: 'zkdubbingstudio@gmail.com',
-      displayName: 'ZK Studio Admin',
-      photoURL: 'https://i.ibb.co/2Yp3CDq9/file-000000006f2c8211b20c6bedc9f9ac12.png',
-      role: 'admin' as const,
-      createdAt: Date.now(),
-    };
-    setUser(adminUser);
-    logAdminActivity('Admin Session Granted', 'security', 'Authenticated as zkdubbingstudio@gmail.com');
-  };
-
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      await signOutUser();
     } catch {}
     setUser(null);
     navigate('/');
@@ -83,13 +86,15 @@ export default function AdminLayout() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-[#07090e] text-white/50">
         <div className="w-12 h-12 border-4 border-white/10 border-t-brand rounded-full animate-spin mb-4 shadow-[0_0_20px_rgba(0,229,255,0.4)]"></div>
-        <p className="text-sm font-bold tracking-wider text-white">Loading ZK Admin Engine...</p>
+        <p className="text-sm font-bold tracking-wider text-white">Verifying ZK Administrator Credentials...</p>
       </div>
     );
   }
 
   // Admin Gatekeeper Login UI
   if (!isAdmin) {
+    const isLoggedNonAdmin = user && !isAdmin;
+
     return (
       <div className="min-h-screen bg-[#07090e] flex flex-col items-center justify-center p-4 relative overflow-hidden">
         {/* Ambient neon backdrops */}
@@ -108,41 +113,65 @@ export default function AdminLayout() {
           </div>
 
           <h1 className="text-2xl font-black text-white tracking-tight mb-1">ZK Voice Hub</h1>
-          <p className="text-xs uppercase tracking-widest text-brand font-bold mb-6">Premium Admin Portal</p>
+          <p className="text-xs uppercase tracking-widest text-brand font-bold mb-6">Master Admin Portal</p>
 
-          <div className="p-4 bg-white/5 border border-white/10 rounded-2xl mb-6 text-left space-y-2">
-            <div className="flex items-center gap-2 text-xs font-semibold text-white/80">
-              <ShieldCheck className="w-4 h-4 text-brand" />
-              <span>Authorized Administrator Account:</span>
+          {isLoggedNonAdmin ? (
+            <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-2xl mb-6 text-left space-y-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-red-400">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>Access Denied: Unauthorized Account</span>
+              </div>
+              <p className="text-xs text-white/70 leading-relaxed">
+                You are currently signed in as <span className="text-white font-mono font-bold">{user.email}</span>. This account does not have administrator privileges.
+              </p>
+              <p className="text-[11px] text-brand pt-1">
+                Authorized Admin: <span className="font-mono font-bold">{PRIMARY_ADMIN_EMAIL}</span>
+              </p>
             </div>
-            <p className="text-xs font-mono text-cyan-300 bg-black/50 px-3 py-1.5 rounded-lg border border-brand/20">
-              zkdubbingstudio@gmail.com
-            </p>
-          </div>
+          ) : (
+            <div className="p-4 bg-white/5 border border-white/10 rounded-2xl mb-6 text-left space-y-2">
+              <div className="flex items-center gap-2 text-xs font-semibold text-white/80">
+                <ShieldCheck className="w-4 h-4 text-brand" />
+                <span>Authorized Administrator Account:</span>
+              </div>
+              <p className="text-xs font-mono text-cyan-300 bg-black/50 px-3 py-1.5 rounded-lg border border-brand/20">
+                {PRIMARY_ADMIN_EMAIL}
+              </p>
+            </div>
+          )}
 
           {authError && (
-            <div className="p-3 mb-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs font-medium">
+            <div className="p-3 mb-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs font-medium text-left break-words">
               {authError}
             </div>
           )}
 
           <div className="space-y-3">
             <button
-              onClick={handleAdminGoogleLogin}
+              onClick={() => handleAdminGoogleLogin(false)}
               disabled={isSigningIn}
               className="w-full py-3 px-4 bg-brand text-black font-extrabold text-sm rounded-xl hover:bg-brand-hover transition-all shadow-[0_0_20px_rgba(0,229,255,0.4)] flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
             >
               <Zap className="w-4 h-4" />
-              {isSigningIn ? 'Signing In...' : 'Sign In with Admin Google Account'}
+              {isSigningIn ? 'Authenticating...' : isLoggedNonAdmin ? 'Switch to Admin Google Account' : 'Sign In with Admin Google Account'}
             </button>
 
             <button
-              onClick={handleQuickAdminDemoAccess}
-              className="w-full py-2.5 px-4 bg-white/5 hover:bg-white/10 text-white font-bold text-xs rounded-xl border border-white/10 transition-colors flex items-center justify-center gap-2"
+              onClick={() => handleAdminGoogleLogin(true)}
+              disabled={isSigningIn}
+              className="w-full py-2.5 px-4 bg-white/5 hover:bg-white/10 text-white/70 font-semibold text-xs rounded-xl border border-white/10 transition-colors flex items-center justify-center gap-2 cursor-pointer"
             >
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              Quick Authenticate (Developer Session)
+              Android / Mobile Redirect Sign-In
             </button>
+
+            {isLoggedNonAdmin && (
+              <button
+                onClick={handleLogout}
+                className="w-full py-2 text-xs text-red-400 hover:text-red-300 transition-colors font-bold cursor-pointer"
+              >
+                Sign Out Current Session
+              </button>
+            )}
 
             <Link
               to="/"
@@ -158,6 +187,31 @@ export default function AdminLayout() {
 
   return (
     <div className="min-h-screen bg-[#07090e] text-white flex flex-col md:flex-row relative">
+      {/* Global Auth Success Toast Notification */}
+      {authSuccessMessage && (
+        <div className="fixed top-6 right-6 z-[70] max-w-md animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="bg-[#051a14]/95 border border-emerald-500/60 rounded-2xl p-4 shadow-[0_0_35px_rgba(16,185,129,0.35)] backdrop-blur-xl flex items-center gap-3.5">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h4 className="text-xs font-black text-emerald-300 uppercase tracking-widest mb-0.5">
+                Admin Authorized
+              </h4>
+              <p className="text-xs text-white/95 font-semibold break-words">
+                {authSuccessMessage}
+              </p>
+            </div>
+            <button
+              onClick={() => setAuthSuccessMessage(null)}
+              className="p-1 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+              aria-label="Dismiss message"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
       {/* Ambient background glows */}
       <div className="fixed top-0 left-64 w-[600px] h-[600px] bg-brand/5 rounded-full blur-[140px] pointer-events-none z-0"></div>
       <div className="fixed bottom-0 right-0 w-[500px] h-[500px] bg-purple-600/5 rounded-full blur-[140px] pointer-events-none z-0"></div>

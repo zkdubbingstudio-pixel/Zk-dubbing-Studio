@@ -115,7 +115,7 @@ export default function AdminSecurity() {
                   key={mins}
                   type="button"
                   onClick={() => handleTimeoutChange(mins)}
-                  className={`py-2 px-2 rounded-xl text-xs font-bold transition-all ${
+                  className={`py-2 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                     settings.sessionTimeoutMinutes === mins
                       ? 'bg-brand text-black shadow-[0_0_15px_rgba(0,229,255,0.4)]'
                       : 'bg-white/5 text-white/70 hover:text-white border border-white/5'
@@ -137,6 +137,79 @@ export default function AdminSecurity() {
             <span>Current Inactivity Limit:</span>
             <span className="text-white font-bold">{settings.sessionTimeoutMinutes} Minutes</span>
           </div>
+        </div>
+      </div>
+
+      {/* Firebase Authentication & Authorized Domains Health Card */}
+      <div className="bg-black/40 border border-brand/30 rounded-3xl p-6 backdrop-blur-md space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-brand/10 border border-brand/30 flex items-center justify-center text-brand">
+              <Key className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-white">Firebase Authentication &amp; Authorized Domains</h2>
+              <p className="text-xs text-white/50">Google Sign-In configuration, Authorized Domains list, and mobile redirect state</p>
+            </div>
+          </div>
+          <span className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold w-fit">
+            Google Provider Enabled
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+          <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-1.5">
+            <span className="text-[10px] uppercase font-bold text-white/40 tracking-wider">Initialization Pattern</span>
+            <p className="text-sm font-bold text-white flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Singleton (Once)
+            </p>
+            <p className="text-[11px] text-white/50">Firebase App &amp; Auth initialized exactly once with LocalPersistence</p>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-1.5">
+            <span className="text-[10px] uppercase font-bold text-white/40 tracking-wider">Mobile Chrome Support</span>
+            <p className="text-sm font-bold text-white flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Popup + Redirect Fallback
+            </p>
+            <p className="text-[11px] text-white/50">Bypasses mobile popup blockers on Android &amp; iOS devices</p>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-1.5">
+            <span className="text-[10px] uppercase font-bold text-white/40 tracking-wider">Firestore User Sync</span>
+            <p className="text-sm font-bold text-white flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Collection: /users
+            </p>
+            <p className="text-[11px] text-white/50">User record merged in Firestore upon every successful login</p>
+          </div>
+        </div>
+
+        {/* Domains checklist */}
+        <div className="mt-4 p-4 rounded-2xl bg-black/60 border border-white/10 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-white flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-brand" /> Required Firebase Authorized Domains:
+            </span>
+            <span className="text-[11px] text-white/50 font-mono">Current Host: {typeof window !== 'undefined' ? window.location.hostname : 'localhost'}</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-xs font-mono">
+            {[
+              'localhost',
+              '127.0.0.1',
+              'zk-voicehub.vercel.app',
+              typeof window !== 'undefined' ? window.location.hostname : '',
+              'gen-lang-client-0843629033.firebaseapp.com'
+            ].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).map((dom) => (
+              <div key={dom} className="flex items-center gap-2 p-2 rounded-lg bg-white/5 border border-white/5 text-white/80">
+                <CheckCircle2 className="w-3.5 h-3.5 text-brand shrink-0" />
+                <span className="truncate">{dom}</span>
+              </div>
+            ))}
+          </div>
+
+          <p className="text-[11px] text-white/50 pt-1">
+            To add new domains: Firebase Console → Authentication → Settings → Authorized Domains → Add Domain.
+          </p>
         </div>
       </div>
 

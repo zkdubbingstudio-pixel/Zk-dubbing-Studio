@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
+import { db } from '../../lib/firebase';
+import { collection, getDocs, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { 
   Users, Search as SearchIcon, Trash2, Ban, CheckCircle, 
   Edit2, X, Save, History, Clock, Film, Play, UserCheck, 
@@ -37,50 +39,71 @@ export default function AdminUsers() {
   const fetchUsers = async () => {
     try {
       setError(null);
-      const { data, error } = await supabase
-        .from('users')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const userList: User[] = [];
 
-      if (error) throw error;
-      setUsers(data || []);
+      // 1. Fetch from Firestore users collection primary
+      try {
+        const snap = await getDocs(collection(db, 'users'));
+        snap.forEach((d) => {
+          const u = d.data();
+          userList.push({
+            uid: d.id,
+            id: d.id,
+            email: u.email || '',
+            displayName: u.displayName || u.username || 'Anime Fan',
+            photoURL: u.photoURL || u.avatar_url || '',
+            role: (u.role === 'admin' || u.email === 'zkdubbingstudio@gmail.com') ? 'admin' : 'user',
+            isBanned: Boolean(u.isBanned),
+            createdAt: u.createdAt || Date.now(),
+            settings: u.settings,
+          });
+        });
+      } catch (fErr) {
+        console.warn('Firestore users fetch warning:', fErr);
+      }
+
+      // 2. Fetch from Supabase as supplementary fallback
+      try {
+        const { data: sData } = await supabase
+          .from('users')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (sData && sData.length > 0) {
+          sData.forEach((su: any) => {
+            if (!userList.some((u) => u.uid === su.id || u.email === su.email)) {
+              userList.push({
+                uid: su.id,
+                id: su.id,
+                email: su.email || '',
+                displayName: su.username || 'Anime Fan',
+                photoURL: su.avatar_url || '',
+                role: su.role === 'admin' ? 'admin' : 'user',
+                isBanned: Boolean(su.is_banned),
+                createdAt: su.created_at ? new Date(su.created_at).getTime() : Date.now(),
+              });
+            }
+          });
+        }
+      } catch {}
+
+      if (userList.length > 0) {
+        setUsers(userList);
+      } else {
+        // Fallback user list if no users registered yet
+        setUsers([
+          {
+            uid: 'admin-zk',
+            email: 'zkdubbingstudio@gmail.com',
+            displayName: 'ZK Dubbing Studio Admin',
+            photoURL: 'https://i.ibb.co/2Yp3CDq9/file-000000006f2c8211b20c6bedc9f9ac12.png',
+            role: 'admin',
+            createdAt: Date.now() - 1000 * 60 * 60 * 24 * 30,
+          },
+        ]);
+      }
     } catch (err: any) {
       console.warn(err.message || err);
-      // Fallback user list if empty
-      setUsers([
-        {
-          uid: 'admin-zk',
-          email: 'zkdubbingstudio@gmail.com',
-          displayName: 'ZK Dubbing Studio Admin',
-          photoURL: 'https://i.ibb.co/2Yp3CDq9/file-000000006f2c8211b20c6bedc9f9ac12.png',
-          role: 'admin',
-          createdAt: Date.now() - 1000 * 60 * 60 * 24 * 30,
-        },
-        {
-          uid: 'user-01',
-          email: 'animefan99@gmail.com',
-          displayName: 'Arjun Verma',
-          photoURL: '',
-          role: 'user',
-          createdAt: Date.now() - 1000 * 60 * 60 * 24 * 3,
-        },
-        {
-          uid: 'user-02',
-          email: 'shadow_hunter@yahoo.com',
-          displayName: 'Rohan Sharma',
-          photoURL: '',
-          role: 'user',
-          createdAt: Date.now() - 1000 * 60 * 60 * 12,
-        },
-        {
-          uid: 'user-03',
-          email: 'dubbed_enthusiast@gmail.com',
-          displayName: 'Priya Patel',
-          photoURL: '',
-          role: 'user',
-          createdAt: Date.now() - 1000 * 60 * 60 * 2,
-        },
-      ]);
     } finally {
       setLoading(false);
     }
@@ -95,10 +118,17 @@ export default function AdminUsers() {
       alert('Cannot modify master administrator account.');
       return;
     }
+    const userId = user.uid || user.id;
     try {
       const nextBanned = !user.isBanned;
-      await supabase.from('users').update({ isBanned: nextBanned }).eq('id', user.id || user.uid);
-      setUsers(prev => prev.map(u => (u.id === user.id || u.uid === user.uid) ? { ...u, isBanned: nextBanned } : u));
+      try {
+        await updateDoc(doc(db, 'users', userId), { isBanned: nextBanned });
+      } catch {}
+      try {
+        await supabase.from('users').update({ isBanned: nextBanned }).eq('id', userId);
+      } catch {}
+
+      setUsers(prev => prev.map(u => (u.id === userId || u.uid === userId) ? { ...u, isBanned: nextBanned } : u));
       logAdminActivity('Toggled User Ban', 'user', `${user.email} -> ${nextBanned ? 'Banned' : 'Active'}`);
       setSuccessMsg(`User status updated to ${nextBanned ? 'Banned' : 'Active'}.`);
       setTimeout(() => setSuccessMsg(null), 3000);
@@ -113,9 +143,16 @@ export default function AdminUsers() {
       return;
     }
     if (!window.confirm(`Permanently remove user account ${user.email}?`)) return;
+    const userId = user.uid || user.id;
     try {
-      await supabase.from('users').delete().eq('id', user.id || user.uid);
-      setUsers(prev => prev.filter(u => (u.id || u.uid) !== (user.id || user.uid)));
+      try {
+        await deleteDoc(doc(db, 'users', userId));
+      } catch {}
+      try {
+        await supabase.from('users').delete().eq('id', userId);
+      } catch {}
+
+      setUsers(prev => prev.filter(u => (u.id || u.uid) !== userId));
       logAdminActivity('Deleted User Account', 'user', `Deleted: ${user.email}`);
       setSuccessMsg('User successfully deleted.');
       setTimeout(() => setSuccessMsg(null), 3000);
@@ -172,9 +209,16 @@ export default function AdminUsers() {
   const handleSaveUser = async () => {
     if (!editingUser) return;
     setSaving(true);
+    const userId = editingUser.id || editingUser.uid;
     try {
-      await supabase.from('users').update({ photoURL: avatarUrl }).eq('id', editingUser.id || editingUser.uid);
-      setUsers(prev => prev.map(u => (u.id || u.uid) === (editingUser.id || editingUser.uid) ? { ...u, photoURL: avatarUrl } : u));
+      try {
+        await updateDoc(doc(db, 'users', userId), { photoURL: avatarUrl });
+      } catch {}
+      try {
+        await supabase.from('users').update({ photoURL: avatarUrl }).eq('id', userId);
+      } catch {}
+
+      setUsers(prev => prev.map(u => (u.id === userId || u.uid === userId) ? { ...u, photoURL: avatarUrl } : u));
       setEditingUser(null);
       setSuccessMsg('User profile updated.');
       setTimeout(() => setSuccessMsg(null), 3000);

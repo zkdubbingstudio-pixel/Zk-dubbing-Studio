@@ -9,7 +9,11 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read, write: if request.auth.uid == userId || isSuperAdmin();
+      allow read: if isAuthenticated() || isSuperAdmin();
+      allow write: if (isAuthenticated() && request.auth.uid == userId) || isSuperAdmin();
+    }
+    match /test/{testId} {
+      allow read: if true;
     }
     match /anime/{animeId} {
       allow read, write: if true;
