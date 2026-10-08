@@ -14,6 +14,13 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    define: {
+      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(
+        process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_URL.includes('rwioavitlgzyrbgivwzi')
+          ? process.env.VITE_SUPABASE_URL
+          : 'https://rwioavitlgzyrbgivwzi.supabase.co'
+      ),
+    },
     build: {
       rollupOptions: {
         output: {

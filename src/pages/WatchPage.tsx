@@ -1,10 +1,9 @@
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Play, SkipForward, SkipBack, Server } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { getEpisodeById, getAnimeById, getSeasonsByAnimeId, getEpisodesByAnimeId, resolveEpisodeServers } from '../lib/dataService';
-import { doc, updateDoc, increment } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { getEpisodeById, getAnimeById, getSeasonsByAnimeId, getEpisodesByAnimeId, resolveEpisodeServers, saveUserProgress } from '../lib/dataService';
 import { supabase } from '../lib/supabase';
+import { useAuthStore } from '../store/authStore';
 
 function isDirectVideo(url: string): boolean {
   if (!url) return false;
@@ -45,6 +44,7 @@ export default function WatchPage() {
   const [selectedServer, setSelectedServer] = useState<'server1' | 'server2' | 'server3'>('server1');
 
   const navigate = useNavigate();
+  const { user } = useAuthStore();
 
   const paramId = (id && id !== 'undefined' && id !== 'null') ? id : undefined;
   const paramAnimeId = (routeAnimeId && routeAnimeId !== 'undefined' && routeAnimeId !== 'null') ? routeAnimeId : undefined;
@@ -57,18 +57,15 @@ export default function WatchPage() {
     
     const trackView = async () => {
       try {
-        await updateDoc(doc(db, 'episodes', epId), { views: increment(1) });
+        const epViews = ((episode.views || 0) + 1);
+        await supabase.from('episodes').update({ views: epViews }).eq('id', epId);
         const anId = episode.animeId || episode.anime_id;
         if (anId) {
-          await updateDoc(doc(db, 'anime', anId), { views: increment(1) });
-          try {
-            await supabase.rpc('increment_anime_views', { anime_id: anId });
-          } catch {
-            // ignore
-          }
+          const anViews = ((anime?.views || 0) + 1);
+          await supabase.from('anime').update({ views: anViews }).eq('id', anId);
         }
       } catch (err) {
-        // Safe to ignore if offline or permissions
+        // Safe to ignore if offline
       }
     };
     
@@ -217,6 +214,23 @@ export default function WatchPage() {
           list.unshift(item);
           if (list.length > 20) list.pop();
           localStorage.setItem('zk_watch_history', JSON.stringify(list));
+
+          // Sync to Supabase user_progress table for authenticated users
+          if (user?.uid) {
+            saveUserProgress({
+              userId: user.uid,
+              animeId: item.animeId,
+              animeTitle: item.animeTitle,
+              episodeId: item.episodeId,
+              episodeTitle: item.episodeTitle,
+              seasonId: item.seasonId,
+              seasonNumber: item.seasonNumber,
+              episodeNumber: item.episodeNumber,
+              posterUrl: item.posterUrl,
+              currentTime: 0,
+              duration: 1440,
+            }).catch(() => {});
+          }
         } catch {
           // ignore
         }
@@ -229,6 +243,12 @@ export default function WatchPage() {
     };
     
     fetchData();
+
+    const tenSec = setTimeout(() => {
+      if (isMounted) {
+        setLoading(false);
+      }
+    }, 10000);
 
     const handleEpisodeDeleted = (e: any) => {
       const deletedId = e?.detail?.id;
@@ -243,6 +263,7 @@ export default function WatchPage() {
 
     return () => { 
       isMounted = false; 
+      clearTimeout(tenSec);
       window.removeEventListener('zk_episode_deleted', handleEpisodeDeleted);
     };
   }, [paramId, paramAnimeId, paramSeasonId]);
@@ -605,7 +626,7 @@ export default function WatchPage() {
                 >
                   <div className="relative w-full aspect-video bg-black/50 overflow-hidden">
                     <img 
-                      src={ep.thumbnailUrl || anime?.posterUrl || "https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80"} 
+                      src={ep.thumbnailUrl || ep.thumbnail_url || anime?.posterUrl || anime?.poster_url || ""} 
                       alt={ep.title} 
                       className={`w-full h-full object-cover transition-transform duration-500 opacity-90 group-hover:scale-105 group-hover:opacity-100 ${isCurrent ? 'opacity-100 scale-105' : ''}`} 
                       loading="lazy"

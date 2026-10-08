@@ -1,7 +1,5 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
-import { db } from '../../lib/firebase';
-import { collection, getDocs, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { 
   Users, Search as SearchIcon, Trash2, Ban, CheckCircle, 
   Edit2, X, Save, History, Clock, Film, Play, UserCheck, 
@@ -41,28 +39,7 @@ export default function AdminUsers() {
       setError(null);
       const userList: User[] = [];
 
-      // 1. Fetch from Firestore users collection primary
-      try {
-        const snap = await getDocs(collection(db, 'users'));
-        snap.forEach((d) => {
-          const u = d.data();
-          userList.push({
-            uid: d.id,
-            id: d.id,
-            email: u.email || '',
-            displayName: u.displayName || u.username || 'Anime Fan',
-            photoURL: u.photoURL || u.avatar_url || '',
-            role: (u.role === 'admin' || u.email === 'zkdubbingstudio@gmail.com') ? 'admin' : 'user',
-            isBanned: Boolean(u.isBanned),
-            createdAt: u.createdAt || Date.now(),
-            settings: u.settings,
-          });
-        });
-      } catch (fErr) {
-        console.warn('Firestore users fetch warning:', fErr);
-      }
-
-      // 2. Fetch from Supabase as supplementary fallback
+      // Fetch from Supabase users table
       try {
         const { data: sData } = await supabase
           .from('users')
@@ -71,21 +48,22 @@ export default function AdminUsers() {
 
         if (sData && sData.length > 0) {
           sData.forEach((su: any) => {
-            if (!userList.some((u) => u.uid === su.id || u.email === su.email)) {
-              userList.push({
-                uid: su.id,
-                id: su.id,
-                email: su.email || '',
-                displayName: su.username || 'Anime Fan',
-                photoURL: su.avatar_url || '',
-                role: su.role === 'admin' ? 'admin' : 'user',
-                isBanned: Boolean(su.is_banned),
-                createdAt: su.created_at ? new Date(su.created_at).getTime() : Date.now(),
-              });
-            }
+            userList.push({
+              uid: su.id,
+              id: su.id,
+              email: su.email || '',
+              displayName: su.username || su.displayName || 'Anime Fan',
+              photoURL: su.photo_url || su.photoURL || su.avatar_url || '',
+              role: (su.role === 'admin' || su.email === 'zkdubbingstudio@gmail.com') ? 'admin' : 'user',
+              isBanned: Boolean(su.is_banned || su.isBanned),
+              createdAt: su.created_at ? new Date(su.created_at).getTime() : Date.now(),
+              settings: su.settings,
+            });
           });
         }
-      } catch {}
+      } catch (sErr) {
+        console.warn('Supabase users fetch warning:', sErr);
+      }
 
       if (userList.length > 0) {
         setUsers(userList);
@@ -122,9 +100,6 @@ export default function AdminUsers() {
     try {
       const nextBanned = !user.isBanned;
       try {
-        await updateDoc(doc(db, 'users', userId), { isBanned: nextBanned });
-      } catch {}
-      try {
         await supabase.from('users').update({ isBanned: nextBanned }).eq('id', userId);
       } catch {}
 
@@ -146,9 +121,6 @@ export default function AdminUsers() {
     const userId = user.uid || user.id;
     try {
       try {
-        await deleteDoc(doc(db, 'users', userId));
-      } catch {}
-      try {
         await supabase.from('users').delete().eq('id', userId);
       } catch {}
 
@@ -161,44 +133,36 @@ export default function AdminUsers() {
     }
   };
 
-  const openWatchHistory = (user: any) => {
+  const openWatchHistory = async (user: any) => {
     setViewingHistoryUser(user);
     setLoadingHistory(true);
+    const userId = user?.uid || user?.id;
 
-    // Retrieve or simulate user watch history telemetry
-    setTimeout(() => {
-      setUserWatchHistory([
-        {
-          id: 'hist-1',
-          animeTitle: 'Solo Leveling (Hindi Dubbed)',
-          episodeNumber: 12,
-          watchedAt: '2 hours ago',
-          progressPercentage: 100,
-        },
-        {
-          id: 'hist-2',
-          animeTitle: 'Demon Slayer: Kimetsu no Yaiba',
-          episodeNumber: 8,
-          watchedAt: 'Yesterday',
-          progressPercentage: 85,
-        },
-        {
-          id: 'hist-3',
-          animeTitle: 'Jujutsu Kaisen Season 2',
-          episodeNumber: 5,
-          watchedAt: '3 days ago',
-          progressPercentage: 60,
-        },
-        {
-          id: 'hist-4',
-          animeTitle: 'Attack on Titan: Final Season',
-          episodeNumber: 1,
-          watchedAt: '1 week ago',
-          progressPercentage: 100,
-        },
-      ]);
+    try {
+      const { data } = await supabase
+        .from('user_progress')
+        .select('*')
+        .eq('user_id', userId)
+        .order('updated_at', { ascending: false });
+
+      if (data && data.length > 0) {
+        setUserWatchHistory(
+          data.map((item: any) => ({
+            id: item.id || item.episode_id,
+            animeTitle: item.anime_title || 'Anime Series',
+            episodeNumber: item.episode_number || 1,
+            watchedAt: item.updated_at ? new Date(item.updated_at).toLocaleDateString() : 'Recently',
+            progressPercentage: item.duration > 0 ? Math.min(100, Math.round(((item.current_time || 0) / item.duration) * 100)) : 100,
+          }))
+        );
+      } else {
+        setUserWatchHistory([]);
+      }
+    } catch {
+      setUserWatchHistory([]);
+    } finally {
       setLoadingHistory(false);
-    }, 400);
+    }
   };
 
   const openEdit = (user: any) => {
@@ -212,10 +176,7 @@ export default function AdminUsers() {
     const userId = editingUser.id || editingUser.uid;
     try {
       try {
-        await updateDoc(doc(db, 'users', userId), { photoURL: avatarUrl });
-      } catch {}
-      try {
-        await supabase.from('users').update({ photoURL: avatarUrl }).eq('id', userId);
+        await supabase.from('users').update({ photo_url: avatarUrl, photoURL: avatarUrl }).eq('id', userId);
       } catch {}
 
       setUsers(prev => prev.map(u => (u.id === userId || u.uid === userId) ? { ...u, photoURL: avatarUrl } : u));

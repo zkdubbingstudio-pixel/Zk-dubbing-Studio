@@ -1,7 +1,19 @@
 import { useParams, Link, useLocation, useNavigate } from 'react-router-dom';
-import { Play, Send, ChevronDown, Sparkles, Star, Film, Calendar, Clock, Mic } from 'lucide-react';
+import { Play, Send, ChevronDown, Sparkles, Star, Film, Calendar, Clock, Mic, Heart, Bookmark } from 'lucide-react';
 import { useState, useEffect, useMemo } from 'react';
-import { getAnimeById, getSeasonsByAnimeId, getEpisodesByAnimeId, matchEpisodeToSeason } from '../lib/dataService';
+import { useAuthStore } from '../store/authStore';
+import { 
+  getAnimeById, 
+  getSeasonsByAnimeId, 
+  getEpisodesByAnimeId, 
+  matchEpisodeToSeason,
+  isFavorite,
+  addFavorite,
+  removeFavorite,
+  isInWatchlist,
+  addToWatchlist,
+  removeFromWatchlist
+} from '../lib/dataService';
 
 export default function AnimeDetails() {
   const { id } = useParams();
@@ -15,6 +27,49 @@ export default function AnimeDetails() {
   const [selectedSeason, setSelectedSeason] = useState<string>('');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+
+  const { user, firebaseUser } = useAuthStore();
+  const [isFav, setIsFav] = useState(false);
+  const [inWl, setInWl] = useState(false);
+  const effectiveUserId = user?.uid || firebaseUser?.uid || null;
+
+  useEffect(() => {
+    if (effectiveUserId && id) {
+      isFavorite(effectiveUserId, id).then(setIsFav).catch(() => {});
+      isInWatchlist(effectiveUserId, id).then(setInWl).catch(() => {});
+    }
+  }, [effectiveUserId, id]);
+
+  const handleToggleFavorite = async () => {
+    if (!effectiveUserId || !anime) return;
+    if (isFav) {
+      await removeFavorite(effectiveUserId, anime.id);
+      setIsFav(false);
+    } else {
+      await addFavorite(effectiveUserId, {
+        id: anime.id,
+        title: anime.title,
+        posterUrl: anime.posterUrl || anime.poster_url || anime.bannerUrl || anime.banner_url
+      });
+      setIsFav(true);
+    }
+  };
+
+  const handleToggleWatchlist = async () => {
+    if (!effectiveUserId || !anime) return;
+    if (inWl) {
+      await removeFromWatchlist(effectiveUserId, anime.id);
+      setInWl(false);
+    } else {
+      await addToWatchlist(effectiveUserId, {
+        id: anime.id,
+        title: anime.title,
+        posterUrl: anime.posterUrl || anime.poster_url || anime.bannerUrl || anime.banner_url,
+        status: 'Plan to Watch'
+      });
+      setInWl(true);
+    }
+  };
 
   // Reset state during render when route param changes
   if (id !== prevId) {
@@ -88,8 +143,13 @@ export default function AnimeDetails() {
 
     window.addEventListener('zk_episode_deleted', handleEpisodeDeleted);
 
+    const tenSecondSafety = setTimeout(() => {
+      setInitialLoading(false);
+    }, 10000);
+
     return () => {
       isMounted = false;
+      clearTimeout(tenSecondSafety);
       window.removeEventListener('zk_episode_deleted', handleEpisodeDeleted);
     };
   }, [id]);
@@ -144,7 +204,9 @@ export default function AnimeDetails() {
           src={
             anime.bannerUrl ||
             anime.posterUrl ||
-            'https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80'
+            anime.banner_url ||
+            anime.poster_url ||
+            ''
           }
           alt={anime.title}
           className="w-full h-full object-cover scale-105"
@@ -164,7 +226,8 @@ export default function AnimeDetails() {
             <img
               src={
                 anime.posterUrl ||
-                'https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80'
+                anime.poster_url ||
+                ''
               }
               alt={anime.title}
               className="w-full aspect-[2/3] object-cover"
@@ -226,7 +289,7 @@ export default function AnimeDetails() {
                   )}
                 </div>
 
-                <div className="pt-2">
+                <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
                   <button
                     onClick={() => {
                       if (isMovie) {
@@ -240,10 +303,36 @@ export default function AnimeDetails() {
                       }
                     }}
                     disabled={!isMovie && !latestEpisode}
-                    className="btn-3d-cyan inline-flex items-center gap-3 px-9 py-4 text-sm sm:text-base font-black disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                    className="btn-3d-cyan inline-flex items-center gap-3 px-8 py-3.5 sm:px-9 sm:py-4 text-sm sm:text-base font-black disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                   >
                     <Play className="w-5 h-5 fill-current" />
                     <span>{isMovie ? 'WATCH MOVIE' : 'PLAY LATEST EPISODE'}</span>
+                  </button>
+
+                  <button
+                    onClick={handleToggleFavorite}
+                    title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+                    className={`inline-flex items-center gap-2 px-5 py-3.5 sm:py-4 rounded-xl text-xs sm:text-sm font-black border transition-all cursor-pointer ${
+                      isFav
+                        ? 'bg-pink-600/20 border-pink-500 text-pink-400 shadow-[0_0_15px_rgba(244,63,94,0.3)]'
+                        : 'bg-[#101624] border-white/10 text-silver hover:text-white hover:border-pink-500/50'
+                    }`}
+                  >
+                    <Heart className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`} />
+                    <span>{isFav ? 'Favorited' : 'Favorite'}</span>
+                  </button>
+
+                  <button
+                    onClick={handleToggleWatchlist}
+                    title={inWl ? 'Remove from Watchlist' : 'Add to Watchlist'}
+                    className={`inline-flex items-center gap-2 px-5 py-3.5 sm:py-4 rounded-xl text-xs sm:text-sm font-black border transition-all cursor-pointer ${
+                      inWl
+                        ? 'bg-[#00e5ff]/20 border-[#00e5ff] text-[#00e5ff] shadow-[0_0_15px_rgba(0,229,255,0.3)]'
+                        : 'bg-[#101624] border-white/10 text-silver hover:text-white hover:border-[#00e5ff]/50'
+                    }`}
+                  >
+                    <Bookmark className={`w-4 h-4 ${inWl ? 'fill-current' : ''}`} />
+                    <span>{inWl ? 'In Watchlist' : 'Watchlist'}</span>
                   </button>
                 </div>
               </>
@@ -385,8 +474,10 @@ export default function AnimeDetails() {
                       <img
                         src={
                           ep.thumbnailUrl ||
+                          ep.thumbnail_url ||
                           anime.posterUrl ||
-                          'https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80'
+                          anime.poster_url ||
+                          ''
                         }
                         alt={ep.title}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90 group-hover:opacity-100"

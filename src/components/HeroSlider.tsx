@@ -135,8 +135,10 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
               <img
                 src={
                   featured.bannerUrl ||
+                  featured.banner_url ||
                   featured.posterUrl ||
-                  'https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80'
+                  featured.poster_url ||
+                  ''
                 }
                 alt={featured.title}
                 className="w-full h-full object-cover object-center"

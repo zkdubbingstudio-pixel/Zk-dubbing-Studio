@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
 
--- 5. WatchHistory Table (Continue Watching)
+-- 5. WatchHistory / UserProgress Table (Continue Watching)
 CREATE TABLE IF NOT EXISTS watchhistory (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
     user_id TEXT NOT NULL,
@@ -141,6 +141,54 @@ CREATE TABLE IF NOT EXISTS watchhistory (
 ALTER TABLE watchhistory ADD COLUMN IF NOT EXISTS anime_id TEXT;
 ALTER TABLE watchhistory ADD COLUMN IF NOT EXISTS season_id TEXT;
 ALTER TABLE watchhistory ADD COLUMN IF NOT EXISTS duration INTEGER DEFAULT 0;
+
+-- 5b. user_progress Table (Dedicated Continue Watching & Episode Progress)
+CREATE TABLE IF NOT EXISTS user_progress (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    user_id TEXT NOT NULL,
+    anime_id TEXT NOT NULL,
+    anime_title TEXT,
+    episode_id TEXT NOT NULL,
+    episode_title TEXT,
+    season_id TEXT,
+    season_number INTEGER DEFAULT 1,
+    episode_number INTEGER DEFAULT 1,
+    poster_url TEXT,
+    current_time NUMERIC DEFAULT 0,
+    duration NUMERIC DEFAULT 0,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(user_id, episode_id)
+);
+
+-- 5c. Favorites Table
+CREATE TABLE IF NOT EXISTS favorites (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    user_id TEXT NOT NULL,
+    anime_id TEXT NOT NULL,
+    anime_title TEXT,
+    poster_url TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(user_id, anime_id)
+);
+
+-- 5d. Watchlist Table
+CREATE TABLE IF NOT EXISTS watchlist (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    user_id TEXT NOT NULL,
+    anime_id TEXT NOT NULL,
+    anime_title TEXT,
+    poster_url TEXT,
+    status TEXT DEFAULT 'Plan to Watch',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(user_id, anime_id)
+);
+
+-- 5e. Admin Settings Table
+CREATE TABLE IF NOT EXISTS admin_settings (
+    id TEXT PRIMARY KEY DEFAULT 'primary',
+    settings JSONB NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
 
 -- 6. Backups Table (Automatic disaster recovery snapshots)
 CREATE TABLE IF NOT EXISTS backups (
@@ -168,6 +216,10 @@ ALTER TABLE seasons ENABLE ROW LEVEL SECURITY;
 ALTER TABLE episodes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE watchhistory ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_progress ENABLE ROW LEVEL SECURITY;
+ALTER TABLE favorites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE watchlist ENABLE ROW LEVEL SECURITY;
+ALTER TABLE admin_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE backups ENABLE ROW LEVEL SECURITY;
 
 -- Policies
@@ -190,10 +242,18 @@ CREATE POLICY "Anime is viewable by everyone" ON anime FOR SELECT USING (true);
 CREATE POLICY "Seasons are viewable by everyone" ON seasons FOR SELECT USING (true);
 CREATE POLICY "Episodes are viewable by everyone" ON episodes FOR SELECT USING (true);
 CREATE POLICY "Public profiles are viewable by everyone" ON users FOR SELECT USING (true);
+CREATE POLICY "User progress viewable by everyone" ON user_progress FOR SELECT USING (true);
+CREATE POLICY "Favorites viewable by everyone" ON favorites FOR SELECT USING (true);
+CREATE POLICY "Watchlist viewable by everyone" ON watchlist FOR SELECT USING (true);
+CREATE POLICY "Admin settings viewable by everyone" ON admin_settings FOR SELECT USING (true);
 
 CREATE POLICY "Allow all operations on anime" ON anime USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations on seasons" ON seasons USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations on episodes" ON episodes USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations on users" ON users USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations on watchhistory" ON watchhistory USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all operations on user_progress" ON user_progress USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all operations on favorites" ON favorites USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all operations on watchlist" ON watchlist USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all operations on admin_settings" ON admin_settings USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all operations on backups" ON backups USING (true) WITH CHECK (true);

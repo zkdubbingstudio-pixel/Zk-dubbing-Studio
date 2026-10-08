@@ -126,7 +126,7 @@ export default function ImageUpload({ label, value, onChange, folder, className 
             </div>
           ) : value ? (
             <div className="relative w-full h-full group" onClick={() => fileInputRef.current?.click()}>
-              <img src={value || "https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80"} alt="Preview" className="w-full h-full object-cover" />
+              <img src={value} alt="Preview" className="w-full h-full object-cover" />
               <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center">
                 <UploadCloud className="w-6 h-6 text-white mb-2" />
                 <p className="text-white text-sm font-medium">Click to replace</p>

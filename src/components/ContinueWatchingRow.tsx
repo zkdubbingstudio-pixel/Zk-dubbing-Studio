@@ -1,53 +1,56 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Play, RotateCcw, Clock } from 'lucide-react';
-
-export interface WatchHistoryItem {
-  animeId: string;
-  seasonId: string;
-  episodeId: string;
-  animeTitle: string;
-  episodeTitle?: string;
-  seasonNumber: number;
-  episodeNumber: number;
-  posterUrl: string;
-  currentTime: number;
-  duration: number;
-  updatedAt: number;
-}
+import { Play, RotateCcw, Clock, Trash2 } from 'lucide-react';
+import { useAuthStore } from '../store/authStore';
+import { getUserProgress, deleteUserProgress } from '../lib/dataService';
 
 export default function ContinueWatchingRow() {
-  const [history, setHistory] = useState<WatchHistoryItem[]>([]);
+  const { user, firebaseUser } = useAuthStore();
+  const [history, setHistory] = useState<any[]>([]);
+  const effectiveUserId = user?.uid || firebaseUser?.uid || null;
 
+  // Requirement 8: Continue Watching must use only the logged-in user's watch history from Supabase
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('zk_watch_history');
-      if (raw) {
-        const parsed = JSON.parse(raw) as WatchHistoryItem[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // Sort by recently watched
-          const sorted = parsed.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-          setHistory(sorted);
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
+    let isMounted = true;
 
-  const handleClearItem = (e: React.MouseEvent, epId: string) => {
+    async function loadProgress() {
+      if (!effectiveUserId) {
+        if (isMounted) setHistory([]);
+        return;
+      }
+
+      try {
+        const list = await getUserProgress(effectiveUserId);
+        if (isMounted) {
+          // Strictly filter for real records
+          const valid = (list || []).filter(
+            (item: any) => Boolean(item && item.anime_id && item.episode_id)
+          );
+          setHistory(valid);
+        }
+      } catch {
+        if (isMounted) setHistory([]);
+      }
+    }
+
+    loadProgress();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [effectiveUserId]);
+
+  const handleClearItem = async (e: React.MouseEvent, episodeId: string) => {
     e.preventDefault();
     e.stopPropagation();
-    const updated = history.filter(h => h.episodeId !== epId);
-    setHistory(updated);
-    try {
-      localStorage.setItem('zk_watch_history', JSON.stringify(updated));
-    } catch {
-      // ignore
-    }
+    if (!effectiveUserId) return;
+
+    await deleteUserProgress(effectiveUserId, episodeId);
+    setHistory((prev) => prev.filter((h) => h.episode_id !== episodeId));
   };
 
-  if (history.length === 0) return null;
+  // If user is not logged in or has not watched anything yet, do not display
+  if (!effectiveUserId || history.length === 0) return null;
 
   return (
     <section className="px-4 sm:px-6 lg:px-8">
@@ -69,12 +72,14 @@ export default function ContinueWatchingRow() {
 
       <div className="flex overflow-x-auto snap-x snap-mandatory gap-4 sm:gap-5 pb-6 -mx-4 px-4 sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         {history.map((item) => {
-          const progressPercent = item.duration > 0 ? Math.min(100, Math.max(5, (item.currentTime / item.duration) * 100)) : 40;
-          const route = `/watch/${item.animeId}/${item.seasonId}/${item.episodeId}`;
+          const currentTime = Number(item.current_time) || 0;
+          const duration = Number(item.duration) || 1440;
+          const progressPercent = duration > 0 ? Math.min(100, Math.max(5, (currentTime / duration) * 100)) : 25;
+          const route = `/watch/${item.anime_id}/${item.season_id || 's1'}/${item.episode_id}`;
 
           return (
             <div
-              key={`cw-${item.episodeId}`}
+              key={`cw-${item.episode_id}`}
               className="flex-none w-64 sm:w-72 md:w-80 snap-start group relative"
             >
               <Link
@@ -83,11 +88,19 @@ export default function ContinueWatchingRow() {
               >
                 {/* 16:9 Thumbnail view */}
                 <div className="relative aspect-video w-full overflow-hidden bg-[#0a0e17]">
-                  <img
-                    src={item.posterUrl || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&q=80&w=400'}
-                    alt={item.animeTitle}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-85 group-hover:opacity-100"
-                  />
+                  {item.poster_url ? (
+                    <img
+                      src={item.poster_url}
+                      alt={item.anime_title || 'Episode'}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90 group-hover:opacity-100"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-tr from-[#05070b] to-[#101726] p-4 text-center">
+                      <Play className="w-8 h-8 text-[#00e5ff] opacity-75 mb-1" />
+                      <span className="text-xs font-bold text-silver-light line-clamp-1">{item.anime_title}</span>
+                    </div>
+                  )}
 
                   {/* Dark vignette */}
                   <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-[#05070b]/40 to-transparent" />
@@ -95,7 +108,7 @@ export default function ContinueWatchingRow() {
                   {/* Badges */}
                   <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5">
                     <span className="bg-black/80 backdrop-blur text-white text-[10px] font-bold px-2 py-0.5 rounded border border-white/10">
-                      S{item.seasonNumber} : EP {item.episodeNumber}
+                      S{item.season_number || 1} : EP {item.episode_number || 1}
                     </span>
                   </div>
 
@@ -119,20 +132,20 @@ export default function ContinueWatchingRow() {
                 <div className="p-3.5 bg-[#0a0e17]/90 flex items-center justify-between">
                   <div className="min-w-0 flex-1 pr-2">
                     <h3 className="font-bold text-silver-light text-sm truncate group-hover:text-brand transition-colors">
-                      {item.animeTitle}
+                      {item.anime_title || 'Anime Series'}
                     </h3>
                     <p className="text-xs text-silver-dark flex items-center gap-1 mt-0.5">
                       <Clock className="w-3 h-3 text-silver-dark" />
-                      Episode {item.episodeNumber}
+                      {item.episode_title || `Episode ${item.episode_number || 1}`}
                     </p>
                   </div>
 
                   <button
-                    onClick={(e) => handleClearItem(e, item.episodeId)}
+                    onClick={(e) => handleClearItem(e, item.episode_id)}
                     title="Remove from history"
-                    className="p-1.5 text-silver-dark hover:text-red-400 hover:bg-white/5 rounded-full transition-colors"
+                    className="p-1.5 text-silver-dark hover:text-red-400 hover:bg-white/5 rounded-full transition-colors cursor-pointer"
                   >
-                    &times;
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               </Link>

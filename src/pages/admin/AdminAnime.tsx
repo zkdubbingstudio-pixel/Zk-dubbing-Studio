@@ -625,7 +625,7 @@ export default function AdminAnime() {
       {viewMode === 'grid' ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {filteredAnime.map((anime, index) => {
-            const poster = anime.posterUrl || anime.poster_url || "https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80";
+            const poster = anime.posterUrl || anime.poster_url || "";
             return (
               <div
                 key={anime.id}
@@ -775,7 +775,7 @@ export default function AdminAnime() {
                     <td className="p-4">
                       <div className="flex items-center gap-3">
                         <img
-                          src={anime.posterUrl || anime.poster_url || "https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80"}
+                          src={anime.posterUrl || anime.poster_url || ""}
                           alt={anime.title}
                           className="w-10 h-14 rounded-xl object-cover flex-shrink-0 border border-white/10"
                         />

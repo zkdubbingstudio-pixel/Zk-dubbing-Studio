@@ -248,7 +248,7 @@ export default function AdminDashboard() {
                         {idx + 1}
                       </span>
                       <img 
-                        src={anime.posterUrl || anime.poster_url || "https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80"} 
+                        src={anime.posterUrl || anime.poster_url || ""} 
                         alt={anime.title} 
                         className="w-12 h-14 rounded-xl object-cover flex-shrink-0 border border-white/10 group-hover:scale-105 transition-transform"
                       />
@@ -396,7 +396,7 @@ export default function AdminDashboard() {
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <img 
-                      src={anime.posterUrl || anime.poster_url || "https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80"} 
+                      src={anime.posterUrl || anime.poster_url || ""} 
                       alt={anime.title} 
                       className="w-10 h-10 rounded-xl object-cover flex-shrink-0 border border-white/10"
                     />

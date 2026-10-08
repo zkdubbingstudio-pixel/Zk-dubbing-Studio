@@ -35,7 +35,15 @@ export default function SeasonDetails() {
       }
     };
     fetchData();
-    return () => { isMounted = false; };
+
+    const tenSec = setTimeout(() => {
+      if (isMounted) setLoading(false);
+    }, 10000);
+
+    return () => { 
+      isMounted = false; 
+      clearTimeout(tenSec);
+    };
   }, [id, seasonId]);
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-white/50">Loading Season...</div>;
@@ -49,7 +57,7 @@ export default function SeasonDetails() {
       <div className="relative h-[300px] md:h-[400px] w-full">
         <div className="absolute inset-0 bg-gradient-to-t from-bg-base via-bg-base/60 to-transparent z-10" />
         <img 
-          src={currentSeason.bannerUrl || currentSeason.banner_url || anime?.bannerUrl || anime?.posterUrl || "https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80"} 
+          src={currentSeason.bannerUrl || currentSeason.banner_url || anime?.bannerUrl || anime?.posterUrl || ""} 
           alt={currentSeason.title}
           className="w-full h-full object-cover"
         />
@@ -68,7 +76,7 @@ export default function SeasonDetails() {
           {/* Poster */}
           <div className="w-40 md:w-64 flex-shrink-0 mx-auto md:mx-0">
             <img 
-              src={currentSeason.posterUrl || currentSeason.poster_url || anime?.posterUrl || "https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80"} 
+              src={currentSeason.posterUrl || currentSeason.poster_url || anime?.posterUrl || ""} 
               alt={currentSeason.title}
               className="w-full aspect-[2/3] object-cover rounded-xl shadow-2xl ring-1 ring-white/10"
             />
@@ -121,7 +129,7 @@ export default function SeasonDetails() {
                 {/* Thumbnail container */}
                 <div className="relative w-full sm:w-48 aspect-video rounded-lg overflow-hidden flex-shrink-0 bg-black/50">
                   <img 
-                    src={ep.thumbnailUrl || ep.thumbnail_url || anime?.posterUrl || "https://images.unsplash.com/photo-1541562232579-512a21360020?auto=format&fit=crop&q=80"} 
+                    src={ep.thumbnailUrl || ep.thumbnail_url || anime?.posterUrl || ""} 
                     alt={ep.title}
                     className="w-full h-full object-cover opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-300"
                   />

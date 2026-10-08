@@ -48,6 +48,17 @@ export default function App() {
   const { setFirebaseUser, setUser, setLoading, setAuthError, setAuthSuccessMessage } = useAuthStore();
 
   useEffect(() => {
+    // 0. Remove any cached clients / storage from old Supabase project (Requirement 3)
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        Object.keys(localStorage).forEach((key) => {
+          if (key.startsWith('sb-') || key.toLowerCase().includes('supabase')) {
+            localStorage.removeItem(key);
+          }
+        });
+      }
+    } catch {}
+
     // 1. Process redirect result if returning from mobile Google Sign-In redirect flow
     processRedirectResult()
       .then((userRecord) => {
@@ -116,6 +127,9 @@ export default function App() {
           <Route path="/" element={<RootLayout />}>
             <Route index element={<Home />} />
             <Route path="search" element={<Search />} />
+            <Route path="browse" element={<Search />} />
+            <Route path="trending" element={<Home />} />
+            <Route path="new-drops" element={<Home />} />
             <Route path="profile" element={<Profile />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="anime/:id" element={<AnimeDetails />} />

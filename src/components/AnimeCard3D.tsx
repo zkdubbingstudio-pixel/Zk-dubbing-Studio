@@ -59,8 +59,10 @@ export default function AnimeCard3D({
     anime.posterUrl ||
     anime.poster_url ||
     anime.thumbnailUrl ||
+    anime.thumbnail_url ||
     anime.bannerUrl ||
-    'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&q=80&w=350&h=500';
+    anime.banner_url ||
+    '';
 
   const title = anime.title || anime.episodeTitle || 'Untitled Anime';
   const isMovie = Boolean(anime.type === 'Movie' || anime.contentType === 'Movie' || anime.isMovie);
@@ -109,12 +111,21 @@ export default function AnimeCard3D({
               aspectRatio === 'video' ? 'aspect-video' : 'aspect-[2/3]'
             } overflow-hidden bg-[#0a0e17]`}
           >
-            <img
-              src={posterImg}
-              alt={title}
-              loading="lazy"
-              className="w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-110 opacity-90 group-hover:opacity-100"
-            />
+            {posterImg ? (
+              <img
+                src={posterImg}
+                alt={title}
+                loading="lazy"
+                className="w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-110 opacity-90 group-hover:opacity-100"
+              />
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center bg-gradient-to-tr from-[#05070b] via-[#0a0e17] to-[#121c2d]">
+                <div className="w-8 h-8 rounded-lg bg-[#00e5ff]/10 border border-[#00e5ff]/30 flex items-center justify-center mb-2">
+                  <Play className="w-4 h-4 text-[#00e5ff]" />
+                </div>
+                <span className="text-xs font-bold text-silver-light line-clamp-2">{title}</span>
+              </div>
+            )}
 
             {/* Cinematic Gradient Overlays */}
             <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-[#05070b]/30 to-transparent opacity-80 group-hover:opacity-60 transition-opacity duration-300" />

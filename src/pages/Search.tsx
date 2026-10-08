@@ -1,86 +1,79 @@
 import { useState, useEffect } from 'react';
 import { Search as SearchIcon, Filter, Sparkles, Film } from 'lucide-react';
-import { supabase } from '../lib/supabase';
-import { getAllAnime } from '../lib/dataService';
+import { supabase, executeSupabaseWithRetry } from '../lib/supabase';
+import { normalizeAnime, getGenres } from '../lib/dataService';
 import AnimeCard3D from '../components/AnimeCard3D';
 import GenreChipsBar from '../components/GenreChipsBar';
-
-const GENRES = [
-  'All',
-  'Action',
-  'Adventure',
-  'Comedy',
-  'Drama',
-  'Fantasy',
-  'Horror',
-  'Mecha',
-  'Mystery',
-  'Romance',
-  'Sci-Fi',
-  'Slice of Life',
-  'Sports',
-  'Supernatural',
-];
 
 export default function Search() {
   const [query, setQuery] = useState('');
   const [selectedGenre, setSelectedGenre] = useState<string>('All');
+  const [genresList, setGenresList] = useState<string[]>(['All']);
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Load dynamic genres from Supabase
+  useEffect(() => {
+    let isMounted = true;
+    getGenres().then((list) => {
+      if (isMounted && Array.isArray(list) && list.length > 0) {
+        setGenresList(list);
+      }
+    }).catch(() => {});
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Search directly in Supabase
   useEffect(() => {
     let isMounted = true;
 
     const fetchSearch = async () => {
       setLoading(true);
       try {
-        // 1. Query Firestore first
-        const all = await getAllAnime();
-        let items = all.filter((a) => {
-          const matchesQuery = !query.trim() || a.title?.toLowerCase().includes(query.toLowerCase().trim());
-          const matchesGenre =
-            selectedGenre === 'All' ||
-            (Array.isArray(a.genres) && a.genres.some((g: string) => g.toLowerCase() === selectedGenre.toLowerCase()));
-          return matchesQuery && matchesGenre;
+        const cleanQuery = query.trim();
+
+        const res = await executeSupabaseWithRetry(async () => {
+          let q = supabase.from('anime').select('*');
+
+          if (cleanQuery) {
+            q = q.ilike('title', `%${cleanQuery}%`);
+          }
+
+          if (selectedGenre !== 'All') {
+            q = q.contains('genres', [selectedGenre]);
+          }
+
+          return await q.order('created_at', { ascending: false }).limit(60);
         });
 
-        // 2. Fallback to Supabase if Firestore returned empty
-        if (items.length === 0 && all.length === 0) {
-          try {
-            let q = supabase.from('anime').select('*');
-            if (query.trim()) {
-              q = q.ilike('title', `%${query.trim()}%`);
-            }
-            if (selectedGenre !== 'All') {
-              q = q.contains('genres', [selectedGenre]);
-            }
-            const { data } = await q.limit(30);
-            if (data && data.length > 0) {
-              items = data.map((item) => ({
-                ...item,
-                posterUrl: item.poster_url || item.posterUrl,
-                releaseYear: item.release_year || item.releaseYear,
-              }));
-            }
-          } catch {
-            // ignore
-          }
-        }
-
         if (isMounted) {
-          setResults(items);
+          if (res?.data && res.data.length > 0) {
+            setResults(res.data.map((item: any) => normalizeAnime(item, item.id)));
+          } else {
+            setResults([]);
+          }
           setLoading(false);
         }
       } catch (err) {
-        console.error('Search error:', err);
-        if (isMounted) setLoading(false);
+        if (isMounted) {
+          setResults([]);
+          setLoading(false);
+        }
       }
     };
 
-    const debounce = setTimeout(() => fetchSearch(), 250);
+    const debounce = setTimeout(() => fetchSearch(), 200);
+    const tenSecTimeout = setTimeout(() => {
+      if (isMounted) setLoading(false);
+    }, 10000);
+
     return () => {
       isMounted = false;
       clearTimeout(debounce);
+      clearTimeout(tenSecTimeout);
     };
   }, [query, selectedGenre]);
 
@@ -114,7 +107,7 @@ export default function Search() {
             {query && (
               <button
                 onClick={() => setQuery('')}
-                className="pr-5 text-silver-dark hover:text-white text-xs font-bold"
+                className="pr-5 text-silver-dark hover:text-white text-xs font-bold cursor-pointer"
               >
                 CLEAR
               </button>
@@ -130,13 +123,13 @@ export default function Search() {
             <Filter className="w-4 h-4 text-brand" />
             <span>Select Category</span>
           </div>
-          <span className="text-[11px] text-silver-dark">
+          <span className="text-[11px] text-silver-dark font-mono">
             {selectedGenre === 'All' ? 'All Genres Active' : `Filtered by ${selectedGenre}`}
           </span>
         </div>
 
         <GenreChipsBar
-          genres={GENRES}
+          genres={genresList}
           selectedGenre={selectedGenre}
           onSelectGenre={setSelectedGenre}
         />
@@ -185,7 +178,7 @@ export default function Search() {
                 setQuery('');
                 setSelectedGenre('All');
               }}
-              className="btn-3d-cyan mt-5 px-6 py-2.5 text-xs font-bold"
+              className="btn-3d-cyan mt-5 px-6 py-2.5 text-xs font-bold cursor-pointer"
             >
               RESET FILTERS
             </button>
