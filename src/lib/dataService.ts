@@ -113,6 +113,14 @@ export interface EpisodeItem {
   isMovie?: boolean;
   createdAt?: any;
   created_at?: any;
+  // Joined relational data (Requirement 3)
+  anime?: any;
+  season?: any;
+  animeTitle?: string;
+  animePoster?: string;
+  animeBanner?: string;
+  animeGenres?: string[];
+  seasonTitle?: string;
 }
 
 export interface BackupRecord {
@@ -280,7 +288,12 @@ export function normalizeAnime(item: any, id?: string): AnimeItem {
   };
 }
 
-export function normalizeEpisodeDoc(dId: string, data: any, animeIdFallback?: string): EpisodeItem {
+export function normalizeEpisodeDoc(
+  dId: string, 
+  data: any, 
+  animeIdFallbackOrJoinedAnime?: any,
+  joinedSeasonParam?: any
+): EpisodeItem {
   const { server1, server2, server3 } = resolveEpisodeServers(data);
   const rawSeason = data.seasonId || data.season_id;
   const epSeason = (rawSeason && rawSeason !== 's1' && rawSeason !== 'null' && rawSeason !== 'undefined') ? String(rawSeason) : '';
@@ -293,13 +306,24 @@ export function normalizeEpisodeDoc(dId: string, data: any, animeIdFallback?: st
   const epNum = Number(data.episodeNumber || data.episode_number) || 1;
   const isMovie = Boolean(data.isMovie || data.type === 'Movie' || epSeason === 'movie');
 
+  // Handle joined anime & season (Requirement 3: Join episodes with anime and seasons using anime_id and season_id)
+  const animeObj = data.anime || (typeof animeIdFallbackOrJoinedAnime === 'object' ? animeIdFallbackOrJoinedAnime : null);
+  const seasonObj = data.seasons || data.season || joinedSeasonParam || null;
+  const fallbackAnimeId = typeof animeIdFallbackOrJoinedAnime === 'string' ? animeIdFallbackOrJoinedAnime : '';
+
+  const animeTitle = animeObj?.title || data.anime_title || data.animeTitle || '';
+  const animePoster = animeObj?.poster_url || animeObj?.posterUrl || '';
+  const animeBanner = animeObj?.banner_url || animeObj?.bannerUrl || '';
+  const animeGenres = Array.isArray(animeObj?.genres) ? animeObj.genres : [];
+  const seasonTitle = seasonObj?.title || (epSeasonNum ? `Season ${epSeasonNum}` : 'Season 1');
+
   return {
     ...data,
     id: String(dId),
-    animeId: String(data.animeId || data.anime_id || animeIdFallback || ''),
-    anime_id: String(data.animeId || data.anime_id || animeIdFallback || ''),
-    seasonId: epSeason,
-    season_id: epSeason || null,
+    animeId: String(data.animeId || data.anime_id || animeObj?.id || fallbackAnimeId || ''),
+    anime_id: String(data.animeId || data.anime_id || animeObj?.id || fallbackAnimeId || ''),
+    seasonId: epSeason || (seasonObj?.id ? String(seasonObj.id) : ''),
+    season_id: epSeason || (seasonObj?.id ? String(seasonObj.id) : null),
     seasonNumber: epSeasonNum,
     season_number: epSeasonNum,
     episodeNumber: epNum,
@@ -307,8 +331,8 @@ export function normalizeEpisodeDoc(dId: string, data: any, animeIdFallback?: st
     title: data.title || data.episode_title || (isMovie ? 'Full Movie' : `Episode ${epNum}`),
     episode_title: data.episode_title || data.title || (isMovie ? 'Full Movie' : `Episode ${epNum}`),
     description: data.description || '',
-    thumbnailUrl: data.thumbnailUrl || data.thumbnail_url || '',
-    thumbnail_url: data.thumbnail_url || data.thumbnailUrl || '',
+    thumbnailUrl: data.thumbnailUrl || data.thumbnail_url || animeBanner || animePoster || '',
+    thumbnail_url: data.thumbnail_url || data.thumbnailUrl || animeBanner || animePoster || '',
     duration: data.duration || (isMovie ? '1h 45m' : '24m'),
     releaseDate: data.releaseDate || data.release_date || '',
     server1Url: server1,
@@ -329,6 +353,13 @@ export function normalizeEpisodeDoc(dId: string, data: any, animeIdFallback?: st
     published: data.published !== false,
     created_at: data.created_at || data.createdAt || new Date().toISOString(),
     isMovie,
+    anime: animeObj,
+    season: seasonObj,
+    animeTitle,
+    animePoster,
+    animeBanner,
+    animeGenres,
+    seasonTitle,
   };
 }
 
@@ -367,78 +398,23 @@ export async function createAutoBackup(type: 'anime' | 'season' | 'episode' | 'b
 // DYNAMIC TABLE DETECTION & RESOLUTION (Requirement 1, 2, 7)
 // -------------------------------------------------------------
 
-export const ANIME_TABLE_CANDIDATES = [
-  'anime',
-  'animes',
-  'anime_list',
-  'anime_lists',
-  'shows',
-  'series',
-  'titles',
-  'content',
-  'media',
-];
+// Standard Supabase public tables (Requirement 2 & 5)
+export const ANIME_TABLE_CANDIDATES = ['anime'];
+export const EPISODES_TABLE_CANDIDATES = ['episodes'];
+export const SEASONS_TABLE_CANDIDATES = ['seasons'];
 
-export const EPISODES_TABLE_CANDIDATES = [
-  'episodes',
-  'episode',
-  'anime_episodes',
-  'episodes_list',
-];
-
-export const SEASONS_TABLE_CANDIDATES = [
-  'seasons',
-  'season',
-  'anime_seasons',
-  'seasons_list',
-];
-
-// Active detected table names (defaults to standard names)
 let activeAnimeTable: string = 'anime';
 let activeEpisodesTable: string = 'episodes';
 let activeSeasonsTable: string = 'seasons';
-let tablesDetected = false;
-let isDetecting = false;
-let detectionPromise: Promise<any> | null = null;
 
-// Local Catalog Store (Guarantees Publish Anime saves successfully and syncs across all pages)
-const LOCAL_ANIME_KEY = 'zk_local_anime_catalog';
-const LOCAL_SEASONS_KEY = 'zk_local_seasons_catalog';
-const LOCAL_EPISODES_KEY = 'zk_local_episodes_catalog';
-
+// Kept for backward compatibility - returns empty array (Requirement 5: No mock data or localStorage)
 export function getLocalAnimeList(): AnimeItem[] {
-  try {
-    const raw = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_ANIME_KEY) : null;
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  return [];
 }
 
-export function saveLocalAnimeItem(item: any): void {
-  try {
-    if (typeof window === 'undefined') return;
-    const current = getLocalAnimeList();
-    const cleanId = String(item.id);
-    const existingIdx = current.findIndex(a => a.id === cleanId);
-    const normalized = normalizeAnime(item, cleanId);
-    if (existingIdx >= 0) {
-      current[existingIdx] = { ...current[existingIdx], ...normalized };
-    } else {
-      current.unshift(normalized);
-    }
-    localStorage.setItem(LOCAL_ANIME_KEY, JSON.stringify(current));
-  } catch {}
-}
+export function saveLocalAnimeItem(_item: any): void {}
 
-export function deleteLocalAnimeItem(id: string): void {
-  try {
-    if (typeof window === 'undefined') return;
-    const current = getLocalAnimeList();
-    const filtered = current.filter(a => a.id !== id);
-    localStorage.setItem(LOCAL_ANIME_KEY, JSON.stringify(filtered));
-  } catch {}
-}
+export function deleteLocalAnimeItem(_id: string): void {}
 
 export function isSchemaCachePending(error: any): boolean {
   if (!error) return false;
@@ -446,9 +422,9 @@ export function isSchemaCachePending(error: any): boolean {
 }
 
 /**
- * Detect actual table names in Supabase instead of assuming "anime" (Requirement 1 & 2)
+ * Standard table names in Supabase (Requirement 2)
  */
-export async function detectActualTableNames(force = false): Promise<{
+export async function detectActualTableNames(_force = false): Promise<{
   anime: string;
   episodes: string;
   seasons: string;
@@ -456,113 +432,26 @@ export async function detectActualTableNames(force = false): Promise<{
   episodesExists: boolean;
   seasonsExists: boolean;
 }> {
-  if (tablesDetected && !force) {
-    return {
-      anime: activeAnimeTable,
-      episodes: activeEpisodesTable,
-      seasons: activeSeasonsTable,
-      animeExists: true,
-      episodesExists: true,
-      seasonsExists: true,
-    };
-  }
-
-  if (isDetecting && detectionPromise && !force) {
-    return detectionPromise;
-  }
-
-  isDetecting = true;
-  detectionPromise = (async () => {
-    let foundAnime: string | null = null;
-    let foundEpisodes: string | null = null;
-    let foundSeasons: string | null = null;
-
-    // 1. Detect anime table
-    for (const cand of ANIME_TABLE_CANDIDATES) {
-      try {
-        const { error } = await supabase.from(cand).select('id', { count: 'exact', head: true }).limit(1);
-        if (!error || !isSchemaCachePending(error)) {
-          foundAnime = cand;
-          break;
-        }
-      } catch {
-        // continue to next candidate
-      }
-    }
-
-    // 2. Detect episodes table
-    for (const cand of EPISODES_TABLE_CANDIDATES) {
-      try {
-        const { error } = await supabase.from(cand).select('id', { count: 'exact', head: true }).limit(1);
-        if (!error || !isSchemaCachePending(error)) {
-          foundEpisodes = cand;
-          break;
-        }
-      } catch {
-        // continue
-      }
-    }
-
-    // 3. Detect seasons table
-    for (const cand of SEASONS_TABLE_CANDIDATES) {
-      try {
-        const { error } = await supabase.from(cand).select('id', { count: 'exact', head: true }).limit(1);
-        if (!error || !isSchemaCachePending(error)) {
-          foundSeasons = cand;
-          break;
-        }
-      } catch {
-        // continue
-      }
-    }
-
-    if (foundAnime) activeAnimeTable = foundAnime;
-    if (foundEpisodes) activeEpisodesTable = foundEpisodes;
-    if (foundSeasons) activeSeasonsTable = foundSeasons;
-
-    tablesDetected = Boolean(foundAnime && foundEpisodes && foundSeasons);
-
-    try {
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('zk_active_anime_table', activeAnimeTable);
-        localStorage.setItem('zk_active_episodes_table', activeEpisodesTable);
-        localStorage.setItem('zk_active_seasons_table', activeSeasonsTable);
-      }
-    } catch {}
-
-    isDetecting = false;
-    return {
-      anime: activeAnimeTable,
-      episodes: activeEpisodesTable,
-      seasons: activeSeasonsTable,
-      animeExists: Boolean(foundAnime),
-      episodesExists: Boolean(foundEpisodes),
-      seasonsExists: Boolean(foundSeasons),
-    };
-  })();
-
-  return detectionPromise;
+  return {
+    anime: 'anime',
+    episodes: 'episodes',
+    seasons: 'seasons',
+    animeExists: true,
+    episodesExists: true,
+    seasonsExists: true,
+  };
 }
 
 export async function getActiveAnimeTable(): Promise<string> {
-  if (!tablesDetected) {
-    await detectActualTableNames();
-  }
-  return activeAnimeTable;
+  return 'anime';
 }
 
 export async function getActiveEpisodesTable(): Promise<string> {
-  if (!tablesDetected) {
-    await detectActualTableNames();
-  }
-  return activeEpisodesTable;
+  return 'episodes';
 }
 
 export async function getActiveSeasonsTable(): Promise<string> {
-  if (!tablesDetected) {
-    await detectActualTableNames();
-  }
-  return activeSeasonsTable;
+  return 'seasons';
 }
 
 /**
