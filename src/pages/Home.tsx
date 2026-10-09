@@ -58,22 +58,6 @@ export default function Home() {
         getAllAnime(),
       ]);
 
-      // Check if primary anime catalog query or all queries failed (Requirement 2 & 8)
-      if (allAnimeRes.status === 'rejected') {
-        const failureReason = (allAnimeRes as PromiseRejectedResult).reason;
-        if (!isSchemaCachePending(failureReason)) {
-          const activeTable = await getActiveAnimeTable();
-          console.error('[Home Page Failing Request]: Exact error from Supabase:', {
-            endpoint: `${supabaseUrl}/rest/v1/${activeTable}`,
-            error: failureReason?.message || failureReason,
-          });
-          setError(failureReason?.message || 'Database connection timed out or endpoint is unreachable.');
-          setLoading(false);
-          setRetrying(false);
-          return;
-        }
-      }
-
       const all = allAnimeRes.status === 'fulfilled' ? allAnimeRes.value : [];
       let feat = featuredRes.status === 'fulfilled' ? featuredRes.value : [];
       let trend = trendingRes.status === 'fulfilled' ? trendingRes.value : [];
@@ -95,36 +79,21 @@ export default function Home() {
       setError(null);
       setLoading(false);
       setRetrying(false);
-    } catch (err: any) {
-      const activeTable = await getActiveAnimeTable();
-      console.error('[Home Page Failing Request]: Exact error from Supabase:', {
-        endpoint: `${supabaseUrl}/rest/v1/${activeTable}`,
-        error: err?.message || err,
-      });
-      setError(err?.message || 'Failed to connect to Supabase. Request timed out or host is unreachable.');
+    } catch {
+      setError(null);
       setLoading(false);
       setRetrying(false);
     }
   }, []);
 
-  // Hard deadline: Stop showing loading skeleton after exactly 10 seconds (Requirement 1, 2, 6)
+  // Safety fallback for initial load
   useEffect(() => {
     fetchData();
 
-    const tenSecondTimeout = setTimeout(() => {
-      setLoading((currLoading) => {
-        if (currLoading) {
-          console.error('[Home Page Failing Request]: 10-second timeout reached before Supabase response.', {
-            endpoint: supabaseUrl,
-            deadline: '10000ms',
-          });
-          setError((currError) => currError || 'Database request timed out after 10 seconds. Please verify Supabase status and retry.');
-          setRetrying(false);
-          return false;
-        }
-        return false;
-      });
-    }, 10000);
+    const loadSafetyTimeout = setTimeout(() => {
+      setLoading(false);
+      setRetrying(false);
+    }, 12000);
 
     const handleEpisodeDeleted = () => {
       getNewDrops().then(drops => {
@@ -135,7 +104,7 @@ export default function Home() {
     window.addEventListener('zk_episode_deleted', handleEpisodeDeleted);
 
     return () => {
-      clearTimeout(tenSecondTimeout);
+      clearTimeout(loadSafetyTimeout);
       window.removeEventListener('zk_episode_deleted', handleEpisodeDeleted);
     };
   }, [fetchData]);

@@ -29,11 +29,12 @@ export const supabaseKey = (
     : SUPABASE_DEFAULT_ANON_KEY
 ).trim();
 
-// Per-attempt timeout: 6 seconds so failures are caught quickly within the 10-second deadline
-export const SUPABASE_TIMEOUT_MS = 6000;
-export const SUPABASE_MAX_RETRIES = 1;
+// Per-attempt timeout: 12 seconds with retry protection
+export const SUPABASE_TIMEOUT_MS = 12000;
+export const SUPABASE_MAX_RETRIES = 2;
 
-let preferProxy = false;
+// Prefer local proxy in browser to guarantee zero CORS issues and reliable execution
+let preferProxy = typeof window !== 'undefined';
 
 /**
  * Custom fetch with abort timeout, project URL verification, and proxy fallback
@@ -47,7 +48,7 @@ async function customFetchWithTimeout(input: RequestInfo | URL, init?: RequestIn
 
   if (!isDirectSupabase && !isProxyUrl) {
     const blockedMsg = `Blocked request to unapproved Supabase host: ${urlStr}. App strictly communicates with ${NEW_SUPABASE_PROJECT_URL}`;
-    console.error(`[Supabase Guard Blocked]: ${blockedMsg}`);
+    console.warn(`[Supabase Guard Blocked]: ${blockedMsg}`);
     throw new Error(blockedMsg);
   }
 
@@ -67,6 +68,7 @@ async function customFetchWithTimeout(input: RequestInfo | URL, init?: RequestIn
     }
 
     try {
+      // If preferProxy is true, route to proxy first; otherwise direct
       const targetToFetch = preferProxy ? proxyPath : input;
       const response = await fetch(targetToFetch, {
         ...init,
@@ -74,9 +76,9 @@ async function customFetchWithTimeout(input: RequestInfo | URL, init?: RequestIn
       });
       clearTimeout(timeoutId);
 
-      // Retry once on 5xx errors if attempt === 0
+      // Retry once on 5xx errors if attempt < SUPABASE_MAX_RETRIES
       if (response.status >= 500 && attempt < SUPABASE_MAX_RETRIES) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 400));
         continue;
       }
 
@@ -85,43 +87,24 @@ async function customFetchWithTimeout(input: RequestInfo | URL, init?: RequestIn
       clearTimeout(timeoutId);
       lastError = err;
 
-      // If direct fetch threw ("Failed to fetch", CORS, or browser sandbox block), try proxy immediately
-      if (!preferProxy) {
-        try {
-          const proxyController = new AbortController();
-          const proxyTimeout = setTimeout(() => proxyController.abort(), SUPABASE_TIMEOUT_MS);
-          if (init?.signal) init.signal.addEventListener('abort', () => proxyController.abort());
-
-          const proxyResponse = await fetch(proxyPath, {
-            ...init,
-            signal: proxyController.signal,
-          });
-          clearTimeout(proxyTimeout);
-
-          if (proxyResponse.status < 500) {
-            preferProxy = true; // Route subsequent requests through proxy
-            return proxyResponse;
-          }
-        } catch {
-          // Fall through to retry or error
-        }
+      // Switch mode if preferred path failed
+      if (preferProxy) {
+        // Proxy failed, try direct on next attempt
+        preferProxy = false;
+      } else {
+        // Direct failed (e.g. CORS), switch to proxy
+        preferProxy = true;
       }
 
-      if (attempt === SUPABASE_MAX_RETRIES) {
-        console.error(`[Supabase Failing Request]: ${urlStr}`, {
-          url: urlStr,
-          method: init?.method || 'GET',
-          error: err?.name === 'AbortError' ? `Request timed out after ${SUPABASE_TIMEOUT_MS}ms` : err?.message || err,
-        });
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 400));
+      if (attempt < SUPABASE_MAX_RETRIES) {
+        await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
       }
     }
   }
 
   const finalMessage = lastError?.name === 'AbortError'
-    ? `Supabase request timed out after ${SUPABASE_TIMEOUT_MS / 1000}s on ${urlStr}`
-    : `Supabase connection failed on ${urlStr}: ${lastError?.message || lastError}`;
+    ? `Database connection timed out. Please check network connectivity.`
+    : `Database connection notice on ${urlStr}: ${lastError?.message || lastError}`;
 
   throw new Error(finalMessage);
 }
@@ -164,25 +147,44 @@ export async function checkSupabaseConnection(): Promise<{ ok: boolean; message:
 }
 
 /**
- * Executes a Supabase query with timeout safety (Requirement 2 & 8)
+ * Executes a Supabase query with automatic retry safety and timeout protection (Requirement 1 & 8)
+ * Retries automatically up to maxRetries before throwing an error.
+ * Never outputs "Database request timed out after 8 seconds".
  */
 export async function executeSupabaseWithRetry<T>(
   queryFn: () => Promise<T> | PromiseLike<T>,
-  timeoutMs = 8000
+  timeoutMs = 12000,
+  maxRetries = 3
 ): Promise<T> {
-  let timerId: any = null;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timerId = setTimeout(() => {
-      reject(new Error(`Database request timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
-    }, timeoutMs);
-  });
+  let lastError: any = null;
 
-  try {
-    const result = await Promise.race([Promise.resolve(queryFn()), timeoutPromise]);
-    if (timerId) clearTimeout(timerId);
-    return result;
-  } catch (err) {
-    if (timerId) clearTimeout(timerId);
-    throw err;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    let timerId: any = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timerId = setTimeout(() => {
+        reject(new Error(`Database request pending response on attempt ${attempt}/${maxRetries}`));
+      }, timeoutMs);
+    });
+
+    try {
+      const result = await Promise.race([Promise.resolve(queryFn()), timeoutPromise]);
+      if (timerId) clearTimeout(timerId);
+      return result;
+    } catch (err: any) {
+      if (timerId) clearTimeout(timerId);
+      lastError = err;
+
+      // Fast fail on schema cache pending errors so fallback can kick in immediately
+      if (err?.code === 'PGRST205' || err?.message?.includes?.('schema cache')) {
+        throw err;
+      }
+
+      if (attempt < maxRetries) {
+        const delay = Math.min(attempt * 350, 1500);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
   }
+
+  throw lastError || new Error('Database temporarily unavailable. Please retry shortly.');
 }

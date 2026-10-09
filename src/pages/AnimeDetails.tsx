@@ -104,7 +104,13 @@ export default function AnimeDetails() {
 
     const fetchData = async () => {
       try {
-        const animeData = await getAnimeById(id);
+        // Fetch anime, seasons, and episodes in parallel (Performance Requirement 6)
+        const [animeData, seasonsData, episodesData] = await Promise.all([
+          getAnimeById(id),
+          getSeasonsByAnimeId(id),
+          getEpisodesByAnimeId(id),
+        ]);
+
         if (!isMounted) return;
 
         if (!animeData) {
@@ -121,23 +127,30 @@ export default function AnimeDetails() {
         }
 
         const targetAnimeId = animeData.id;
-        const [seasonsData, episodesData] = await Promise.all([
-          getSeasonsByAnimeId(targetAnimeId),
-          getEpisodesByAnimeId(targetAnimeId),
-        ]);
+        let fetchedEpisodes = episodesData || [];
+        let fetchedSeasons = seasonsData || [];
+
+        // If anime ID resolved differently from requested id, re-fetch seasons/episodes if needed
+        if (targetAnimeId !== id && fetchedEpisodes.length === 0) {
+          const [sData, eData] = await Promise.all([
+            getSeasonsByAnimeId(targetAnimeId),
+            getEpisodesByAnimeId(targetAnimeId),
+          ]);
+          if (sData && sData.length > 0) fetchedSeasons = sData;
+          if (eData && eData.length > 0) fetchedEpisodes = eData;
+        }
 
         if (isMounted) {
-          const fetchedEpisodes = episodesData || [];
           setAllEpisodes(fetchedEpisodes);
 
-          let effectiveSeasons = (seasonsData || []).sort((a: any, b: any) => {
+          let effectiveSeasons = (fetchedSeasons || []).sort((a: any, b: any) => {
             const numA = Number(a.seasonNumber ?? a.order ?? 1);
             const numB = Number(b.seasonNumber ?? b.order ?? 1);
             return numA - numB;
           });
 
           // If no seasons exist in DB but episodes exist, synthesize Season 1
-          if (effectiveSeasons.length === 0 && fetchedEpisodes.length > 0) {
+          if (effectiveSeasons.length === 0) {
             effectiveSeasons = [{
               id: 's1',
               animeId: targetAnimeId,
@@ -147,15 +160,15 @@ export default function AnimeDetails() {
             }];
           }
 
-          if (effectiveSeasons.length > 0) {
-            setSeasons(effectiveSeasons);
-            setSelectedSeason(prev => {
-              if (prev && effectiveSeasons.some((s: any) => s.id === prev)) {
-                return prev;
-              }
-              return effectiveSeasons[0].id;
-            });
-          }
+          setSeasons(effectiveSeasons);
+          setSelectedSeason(prev => {
+            if (prev && effectiveSeasons.some((s: any) => s.id === prev)) {
+              return prev;
+            }
+            // Automatically select Season 1 (Requirement 2)
+            const season1 = effectiveSeasons.find((s: any) => Number(s.seasonNumber) === 1);
+            return season1 ? season1.id : effectiveSeasons[0].id;
+          });
 
           setInitialLoading(false);
         }
@@ -178,13 +191,13 @@ export default function AnimeDetails() {
 
     window.addEventListener('zk_episode_deleted', handleEpisodeDeleted);
 
-    const tenSecondSafety = setTimeout(() => {
-      setInitialLoading(false);
-    }, 10000);
+    const safetyTimeout = setTimeout(() => {
+      if (isMounted) setInitialLoading(false);
+    }, 12000);
 
     return () => {
       isMounted = false;
-      clearTimeout(tenSecondSafety);
+      clearTimeout(safetyTimeout);
       window.removeEventListener('zk_episode_deleted', handleEpisodeDeleted);
     };
   }, [id, navigate]);
@@ -228,7 +241,10 @@ export default function AnimeDetails() {
     );
   }
 
+  const currentSeasonObj = seasons.find((s) => s.id === selectedSeason);
   const bannerImg =
+    currentSeasonObj?.bannerUrl ||
+    currentSeasonObj?.banner_url ||
     anime.bannerUrl ||
     anime.banner_url ||
     anime.posterUrl ||
@@ -236,6 +252,8 @@ export default function AnimeDetails() {
     '';
 
   const posterImg =
+    currentSeasonObj?.posterUrl ||
+    currentSeasonObj?.poster_url ||
     anime.posterUrl ||
     anime.poster_url ||
     anime.bannerUrl ||
@@ -247,18 +265,31 @@ export default function AnimeDetails() {
       {/* 1. Centered Hero Background Banner & Vertically Centered Poster (Requirements 3 & 4) */}
       <div className="relative w-full overflow-hidden bg-[#05070b]">
         <div
-          className="relative w-full min-h-[380px] sm:min-h-[440px] md:min-h-[500px] flex items-center justify-center overflow-hidden"
+          className="relative w-full min-h-[360px] sm:min-h-[420px] md:min-h-[480px] lg:min-h-[520px] flex items-center justify-center overflow-hidden"
           style={{
-            backgroundImage: bannerImg ? `url('${bannerImg}')` : undefined,
             backgroundPosition: 'center center',
             backgroundSize: 'cover',
             backgroundRepeat: 'no-repeat',
           }}
         >
+          {bannerImg ? (
+            <img
+              src={bannerImg}
+              alt={anime.title}
+              className="absolute inset-0 w-full h-full pointer-events-none"
+              style={{
+                objectFit: 'cover',
+                objectPosition: 'center center',
+              }}
+            />
+          ) : (
+            <div className="absolute inset-0 bg-[#0a0e17]" />
+          )}
+
           {/* Dark gradient overlay (40–60%) for better contrast and text readability */}
           <div className="absolute inset-0 bg-black/50" />
           <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-[#05070b]/40 to-transparent" />
-          <div className="absolute inset-0 bg-gradient-to-b from-[#05070b]/50 via-transparent to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-b from-[#05070b]/60 via-transparent to-transparent" />
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-[#00e5ff]/50 to-transparent shadow-[0_0_15px_rgba(0,229,255,0.6)]" />
 
           {/* 2. Poster Centered Vertically Over the Banner with Soft Shadow & Rounded Corners */}
@@ -267,7 +298,11 @@ export default function AnimeDetails() {
               <img
                 src={posterImg}
                 alt={anime.title}
-                className="w-full h-full object-cover object-center rounded-2xl sm:rounded-3xl"
+                className="w-full h-full rounded-2xl sm:rounded-3xl"
+                style={{
+                  objectFit: 'cover',
+                  objectPosition: 'center center',
+                }}
                 loading="eager"
               />
             </div>
