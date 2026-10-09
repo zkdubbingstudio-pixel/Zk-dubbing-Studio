@@ -1,6 +1,6 @@
 import { useParams, Link, useLocation, useNavigate } from 'react-router-dom';
 import { Play, Send, ChevronDown, Sparkles, Star, Film, Calendar, Clock, Mic, Heart, Bookmark } from 'lucide-react';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { 
   getAnimeById, 
@@ -21,12 +21,13 @@ export default function AnimeDetails() {
   const navigate = useNavigate();
 
   const [prevId, setPrevId] = useState(id);
-  const [anime, setAnime] = useState<any>(location.state?.anime?.id === id ? location.state.anime : null);
+  const [anime, setAnime] = useState<any>(location.state?.anime?.id === id && location.state?.anime?.title ? location.state.anime : null);
   const [seasons, setSeasons] = useState<any[]>([]);
   const [allEpisodes, setAllEpisodes] = useState<any[]>([]);
   const [selectedSeason, setSelectedSeason] = useState<string>('');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   const { user, firebaseUser } = useAuthStore();
   const [isFav, setIsFav] = useState(false);
@@ -39,6 +40,21 @@ export default function AnimeDetails() {
       isInWatchlist(effectiveUserId, id).then(setInWl).catch(() => {});
     }
   }, [effectiveUserId, id]);
+
+  // Click-outside listener for season dropdown
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    if (isDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isDropdownOpen]);
 
   const handleToggleFavorite = async () => {
     if (!effectiveUserId || !anime) return;
@@ -74,7 +90,7 @@ export default function AnimeDetails() {
   // Reset state during render when route param changes
   if (id !== prevId) {
     setPrevId(id);
-    const incomingAnime = location.state?.anime?.id === id ? location.state.anime : null;
+    const incomingAnime = location.state?.anime?.id === id && location.state?.anime?.title ? location.state.anime : null;
     setAnime(incomingAnime);
     setSeasons([]);
     setAllEpisodes([]);
@@ -88,24 +104,43 @@ export default function AnimeDetails() {
 
     const fetchData = async () => {
       try {
-        const [animeData, seasonsData, episodesData] = await Promise.all([
-          getAnimeById(id),
-          getSeasonsByAnimeId(id),
-          getEpisodesByAnimeId(id),
+        const animeData = await getAnimeById(id);
+        if (!isMounted) return;
+
+        if (!animeData) {
+          setAnime(null);
+          setInitialLoading(false);
+          return;
+        }
+
+        setAnime(animeData);
+
+        // If the URL id was an alias/episode ID, update URL to canonical anime ID
+        if (animeData.id && animeData.id !== id) {
+          navigate(`/anime/${animeData.id}`, { replace: true });
+        }
+
+        const targetAnimeId = animeData.id;
+        const [seasonsData, episodesData] = await Promise.all([
+          getSeasonsByAnimeId(targetAnimeId),
+          getEpisodesByAnimeId(targetAnimeId),
         ]);
 
         if (isMounted) {
-          if (animeData) setAnime(animeData);
-
           const fetchedEpisodes = episodesData || [];
           setAllEpisodes(fetchedEpisodes);
 
-          let effectiveSeasons = seasonsData || [];
+          let effectiveSeasons = (seasonsData || []).sort((a: any, b: any) => {
+            const numA = Number(a.seasonNumber ?? a.order ?? 1);
+            const numB = Number(b.seasonNumber ?? b.order ?? 1);
+            return numA - numB;
+          });
+
           // If no seasons exist in DB but episodes exist, synthesize Season 1
           if (effectiveSeasons.length === 0 && fetchedEpisodes.length > 0) {
             effectiveSeasons = [{
               id: 's1',
-              animeId: id,
+              animeId: targetAnimeId,
               seasonNumber: 1,
               title: 'Season 1',
               order: 1
@@ -152,19 +187,16 @@ export default function AnimeDetails() {
       clearTimeout(tenSecondSafety);
       window.removeEventListener('zk_episode_deleted', handleEpisodeDeleted);
     };
-  }, [id]);
+  }, [id, navigate]);
 
+  // Load only episodes from the selected season
   const currentSeasonEpisodes = useMemo(() => {
     if (allEpisodes.length === 0) return [];
-    if (!selectedSeason || seasons.length <= 1) return allEpisodes;
+    if (!selectedSeason) return allEpisodes;
 
-    const matched = allEpisodes.filter((ep) =>
+    return allEpisodes.filter((ep) =>
       matchEpisodeToSeason(ep, selectedSeason, seasons, allEpisodes)
     );
-
-    // Requirement 3: Do not show "No episodes found" if episodes exist
-    if (matched.length > 0) return matched;
-    return allEpisodes;
   }, [allEpisodes, selectedSeason, seasons]);
 
   const isMovie = Boolean(anime?.type === 'Movie' || anime?.contentType === 'Movie' || anime?.isMovie);
@@ -196,48 +228,57 @@ export default function AnimeDetails() {
     );
   }
 
+  const bannerImg =
+    anime.bannerUrl ||
+    anime.banner_url ||
+    anime.posterUrl ||
+    anime.poster_url ||
+    '';
+
+  const posterImg =
+    anime.posterUrl ||
+    anime.poster_url ||
+    anime.bannerUrl ||
+    anime.banner_url ||
+    '';
+
   return (
     <div className="pb-24 bg-[#05070b] min-h-screen text-silver-light">
-      {/* 1. Parallax Cinematic Banner */}
-      <div className="relative w-full aspect-[4/3] sm:aspect-video md:aspect-[21/9] max-h-[65vh] overflow-hidden">
-        <img
-          src={
-            anime.bannerUrl ||
-            anime.posterUrl ||
-            anime.banner_url ||
-            anime.poster_url ||
-            ''
-          }
-          alt={anime.title}
-          className="w-full h-full object-cover scale-105"
-          loading="eager"
-        />
-        {/* Layered Cyber Dark Gradients */}
-        <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-[#05070b]/60 to-transparent" />
-        <div className="absolute inset-0 bg-gradient-to-b from-[#05070b]/60 via-transparent to-transparent" />
-        <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-[#00e5ff]/50 to-transparent shadow-[0_0_15px_rgba(0,229,255,0.6)]" />
+      {/* 1. Centered Hero Background Banner & Vertically Centered Poster (Requirements 3 & 4) */}
+      <div className="relative w-full overflow-hidden bg-[#05070b]">
+        <div
+          className="relative w-full min-h-[380px] sm:min-h-[440px] md:min-h-[500px] flex items-center justify-center overflow-hidden"
+          style={{
+            backgroundImage: bannerImg ? `url('${bannerImg}')` : undefined,
+            backgroundPosition: 'center center',
+            backgroundSize: 'cover',
+            backgroundRepeat: 'no-repeat',
+          }}
+        >
+          {/* Dark gradient overlay (40–60%) for better contrast and text readability */}
+          <div className="absolute inset-0 bg-black/50" />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-[#05070b]/40 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-b from-[#05070b]/50 via-transparent to-transparent" />
+          <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-[#00e5ff]/50 to-transparent shadow-[0_0_15px_rgba(0,229,255,0.6)]" />
+
+          {/* 2. Poster Centered Vertically Over the Banner with Soft Shadow & Rounded Corners */}
+          <div className="relative z-10 flex items-center justify-center px-4 py-8 sm:py-10">
+            <div className="w-36 sm:w-48 md:w-56 lg:w-64 aspect-[2/3] rounded-2xl sm:rounded-3xl overflow-hidden glass-cyber-card border-2 border-white/20 shadow-[0_15px_45px_rgba(0,0,0,0.85)] hover:border-[#00e5ff]/80 transition-all duration-300 transform hover:scale-105">
+              <img
+                src={posterImg}
+                alt={anime.title}
+                className="w-full h-full object-cover object-center rounded-2xl sm:rounded-3xl"
+                loading="eager"
+              />
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Main Content Area */}
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center relative z-10 -mt-28 sm:-mt-40 md:-mt-52">
-        {/* 2. 3D Poster with Specular Border */}
-        <div className="perspective-1000 group mb-6">
-          <div className="w-44 sm:w-56 md:w-64 rounded-3xl overflow-hidden glass-cyber-card border-2 border-white/20 shadow-[0_20px_50px_rgba(0,0,0,0.8)] group-hover:border-[#00e5ff]/80 transition-all duration-500 transform group-hover:scale-105 group-hover:-translate-y-2">
-            <img
-              src={
-                anime.posterUrl ||
-                anime.poster_url ||
-                ''
-              }
-              alt={anime.title}
-              className="w-full aspect-[2/3] object-cover"
-              loading="eager"
-            />
-          </div>
-        </div>
-
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center">
         {/* 3. Title & Quick Meta */}
-        <div className="text-center w-full mb-10 space-y-4">
+        <div className="text-center w-full mt-6 sm:mt-8 mb-8 sm:mb-10 space-y-4">
           <div className="flex items-center justify-center gap-2">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#00e5ff]/15 text-[#00e5ff] text-xs font-black border border-[#00e5ff]/30 shadow-[0_0_12px_rgba(0,229,255,0.3)]">
               <Sparkles className="w-3.5 h-3.5" />
@@ -251,7 +292,7 @@ export default function AnimeDetails() {
             )}
           </div>
 
-          <h1 className="text-3xl sm:text-5xl md:text-6xl font-black tracking-tight text-white drop-shadow-[0_4px_25px_rgba(0,0,0,0.8)]">
+          <h1 className="text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-black tracking-tight text-white drop-shadow-[0_4px_25px_rgba(0,0,0,0.8)]">
             {anime.title}
           </h1>
 
@@ -259,7 +300,7 @@ export default function AnimeDetails() {
             const isMovie = Boolean(anime.type === 'Movie' || anime.contentType === 'Movie' || anime.isMovie);
             return (
               <>
-                <div className="flex items-center justify-center gap-3 text-xs sm:text-sm font-bold text-silver">
+                <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 text-xs sm:text-sm font-bold text-silver">
                   {isMovie ? (
                     <>
                       <span className="bg-[#00e5ff] text-black px-4 py-1.5 rounded-full font-black shadow-[0_0_15px_rgba(0,229,255,0.4)]">
@@ -277,10 +318,10 @@ export default function AnimeDetails() {
                   ) : (
                     <>
                       <span className="bg-[#101624] px-4 py-1.5 rounded-full border border-white/10">
-                        {seasons.length > 0 ? `${seasons.length} Seasons` : 'Season 1'}
+                        {seasons.length > 0 ? `${seasons.length} ${seasons.length === 1 ? 'Season' : 'Seasons'}` : 'Season 1'}
                       </span>
                       <span className="bg-[#101624] px-4 py-1.5 rounded-full border border-white/10">
-                        {allEpisodes.length} Episodes
+                        {allEpisodes.length} {allEpisodes.length === 1 ? 'Episode' : 'Episodes'}
                       </span>
                       <span className="bg-[#101624] px-4 py-1.5 rounded-full border border-white/10 text-[#00e5ff]">
                         1080p Ultra HD
@@ -392,30 +433,30 @@ export default function AnimeDetails() {
             href="https://t.me/+BrcaJdug2kgwZDM1"
             target="_blank"
             rel="noopener noreferrer"
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 bg-gradient-to-r from-[#2AABEE] to-[#229ED9] text-white px-8 py-3.5 rounded-full font-bold transition-all hover:shadow-[0_0_20px_rgba(42,171,238,0.5)] hover:scale-105 active:scale-95"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 bg-gradient-to-r from-[#2AABEE] to-[#229ED9] text-white px-8 py-3.5 rounded-full font-bold transition-all hover:shadow-[0_0_20px_rgba(42,171,238,0.5)] hover:scale-105 active:scale-95 cursor-pointer"
           >
             <Send className="w-4 h-4" />
             Join Telegram Channel
           </a>
         </div>
 
-        {/* 5. Choose Season & Episodes Grid (TV Series only) */}
+        {/* 5. Choose Season & Episodes Grid (TV Series only - Requirement 5) */}
         {!isMovie && (
           <div className="w-full max-w-5xl">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
               <h2 className="text-2xl sm:text-3xl font-black text-silver-light">Episodes</h2>
 
               {seasons.length > 0 && (
-                <div className="relative w-full sm:w-64 z-20">
+                <div ref={dropdownRef} className="relative w-full sm:w-64 z-20">
                   <button
                     onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                    onBlur={() => setTimeout(() => setIsDropdownOpen(false), 200)}
+                    type="button"
                     className={`w-full flex items-center justify-between bg-[#101624]/90 backdrop-blur-md border ${
                       isDropdownOpen ? 'border-[#00e5ff] shadow-[0_0_15px_rgba(0,229,255,0.3)]' : 'border-white/10'
                     } rounded-2xl px-5 py-3.5 text-white font-bold cursor-pointer transition-all duration-300 outline-none`}
                   >
                     <span className="truncate pr-4">
-                      {seasons.find((s) => s.id === selectedSeason)?.title || 'Choose Season'}
+                      {seasons.find((s) => s.id === selectedSeason)?.title || (seasons.find((s) => s.id === selectedSeason)?.seasonNumber ? `Season ${seasons.find((s) => s.id === selectedSeason)?.seasonNumber}` : 'Choose Season')}
                     </span>
                     <ChevronDown
                       className={`w-5 h-5 shrink-0 transition-transform duration-300 ${
@@ -424,92 +465,97 @@ export default function AnimeDetails() {
                     />
                   </button>
 
-                  <div
-                    className={`absolute top-full left-0 right-0 mt-2 bg-[#0a0e17]/95 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden shadow-2xl transition-all duration-300 origin-top z-30 ${
-                      isDropdownOpen
-                        ? 'opacity-100 scale-y-100'
-                        : 'opacity-0 scale-y-95 pointer-events-none'
-                    }`}
-                  >
-                    <div className="max-h-60 overflow-y-auto custom-scrollbar py-2">
-                      {seasons.map((season) => {
-                        const isSelected = selectedSeason === season.id;
-                        return (
-                          <button
-                            key={season.id}
-                            onClick={() => {
-                              setSelectedSeason(season.id);
-                              setIsDropdownOpen(false);
-                            }}
-                            className={`w-full flex items-center px-5 py-3 text-left font-bold transition-colors cursor-pointer ${
-                              isSelected
-                                ? 'text-[#00e5ff] bg-[#00e5ff]/10'
-                              : 'text-silver hover:text-white hover:bg-white/5'
-                            }`}
-                          >
-                            {season.title}
-                          </button>
-                        );
-                      })}
+                  {isDropdownOpen && (
+                    <div className="absolute top-full left-0 right-0 mt-2 bg-[#0a0e17]/95 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden shadow-2xl z-30">
+                      <div className="max-h-60 overflow-y-auto custom-scrollbar py-2">
+                        {seasons.map((season) => {
+                          const isSelected = selectedSeason === season.id;
+                          return (
+                            <button
+                              key={season.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedSeason(season.id);
+                                setIsDropdownOpen(false);
+                              }}
+                              className={`w-full flex items-center px-5 py-3 text-left font-bold transition-colors cursor-pointer ${
+                                isSelected
+                                  ? 'text-[#00e5ff] bg-[#00e5ff]/10'
+                                  : 'text-silver hover:text-white hover:bg-white/5'
+                              }`}
+                            >
+                              {season.title || `Season ${season.seasonNumber || 1}`}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
 
             {/* 6. Episodes Grid with 3D Hover Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
-              {currentSeasonEpisodes.map((ep) => {
-                const epSeasonId = ep.seasonId || ep.season_id;
-                const currentSeason = seasons.find((s) => s.id === epSeasonId);
-                const seasonNumber = currentSeason?.seasonNumber || ep.seasonNumber || 1;
+            {currentSeasonEpisodes.length > 0 ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
+                {currentSeasonEpisodes.map((ep) => {
+                  const epSeasonId = ep.seasonId || ep.season_id;
+                  const currentSeason = seasons.find((s) => s.id === epSeasonId);
+                  const seasonNumber = currentSeason?.seasonNumber || ep.seasonNumber || 1;
 
-                return (
-                  <Link
-                    key={ep.id}
-                    to={`/watch/${anime.id}/${epSeasonId || selectedSeason || 's1'}/${ep.id}`}
-                    className="group flex flex-col glass-cyber-card rounded-2xl overflow-hidden border border-white/10 hover:border-[#00e5ff]/70 transition-all duration-300 hover:-translate-y-1.5 hover:shadow-[0_12px_30px_rgba(0,229,255,0.2)]"
-                  >
-                    <div className="relative w-full aspect-video bg-[#0a0e17] overflow-hidden">
-                      <img
-                        src={
-                          ep.thumbnailUrl ||
-                          ep.thumbnail_url ||
-                          anime.posterUrl ||
-                          anime.poster_url ||
-                          ''
-                        }
-                        alt={ep.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90 group-hover:opacity-100"
-                        loading="lazy"
-                      />
+                  return (
+                    <Link
+                      key={ep.id}
+                      to={`/watch/${anime.id}/${epSeasonId || selectedSeason || 's1'}/${ep.id}`}
+                      className="group flex flex-col glass-cyber-card rounded-2xl overflow-hidden border border-white/10 hover:border-[#00e5ff]/70 transition-all duration-300 hover:-translate-y-1.5 hover:shadow-[0_12px_30px_rgba(0,229,255,0.2)]"
+                    >
+                      <div className="relative w-full aspect-video bg-[#0a0e17] overflow-hidden">
+                        <img
+                          src={
+                            ep.thumbnailUrl ||
+                            ep.thumbnail_url ||
+                            anime.bannerUrl ||
+                            anime.banner_url ||
+                            anime.posterUrl ||
+                            anime.poster_url ||
+                            ''
+                          }
+                          alt={ep.title || `Episode ${ep.episodeNumber}`}
+                          className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500 opacity-90 group-hover:opacity-100"
+                          loading="lazy"
+                        />
 
-                      <div className="absolute top-2 left-2 z-10">
-                        <span className="bg-black/80 backdrop-blur-md text-white text-[10px] font-bold px-2 py-0.5 rounded border border-white/10 shadow-lg">
-                          S{seasonNumber} : EP {ep.episodeNumber}
-                        </span>
-                      </div>
+                        <div className="absolute top-2 left-2 z-10">
+                          <span className="bg-black/80 backdrop-blur-md text-white text-[10px] font-bold px-2 py-0.5 rounded border border-white/10 shadow-lg">
+                            S{seasonNumber} : EP {ep.episodeNumber}
+                          </span>
+                        </div>
 
-                      <div className="absolute inset-0 bg-black/30 group-hover:bg-black/60 transition-colors flex items-center justify-center">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#00b4d8] to-[#00f0ff] flex items-center justify-center text-black shadow-[0_0_15px_rgba(0,229,255,0.6)] opacity-0 group-hover:opacity-100 scale-75 group-hover:scale-100 transition-all duration-300">
-                          <Play className="w-4 h-4 fill-current ml-0.5" />
+                        <div className="absolute inset-0 bg-black/30 group-hover:bg-black/60 transition-colors flex items-center justify-center">
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#00b4d8] to-[#00f0ff] flex items-center justify-center text-black shadow-[0_0_15px_rgba(0,229,255,0.6)] opacity-0 group-hover:opacity-100 scale-75 group-hover:scale-100 transition-all duration-300">
+                            <Play className="w-4 h-4 fill-current ml-0.5" />
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="p-3 flex-1 flex flex-col justify-center bg-[#0a0e17]/80">
-                      <h4 className="text-xs sm:text-sm font-bold text-silver-light line-clamp-2 group-hover:text-brand transition-colors">
-                        {ep.title || `Episode ${ep.episodeNumber}`}
-                      </h4>
-                    </div>
-                  </Link>
-                );
-              })}
-            </div>
-
-            {currentSeasonEpisodes.length === 0 && (
-              <div className="text-center py-16 text-silver-dark glass-cyber-card rounded-3xl border border-white/10 mt-6">
-                <p className="text-base font-semibold">No episodes found for this season.</p>
+                      <div className="p-3 flex-1 flex flex-col justify-center bg-[#0a0e17]/80">
+                        <h4 className="text-xs sm:text-sm font-bold text-silver-light line-clamp-2 group-hover:text-brand transition-colors">
+                          {ep.title || `Episode ${ep.episodeNumber}`}
+                        </h4>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-center py-16 px-4 glass-cyber-card rounded-3xl border border-white/10 mt-6 space-y-3">
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-[#00e5ff]/10 border border-[#00e5ff]/20 flex items-center justify-center text-[#00e5ff]">
+                  <Film className="w-6 h-6" />
+                </div>
+                <h3 className="text-lg font-bold text-silver-light">No episodes found</h3>
+                <p className="text-xs sm:text-sm text-silver-dark max-w-sm mx-auto">
+                  No episodes have been released for {seasons.find((s) => s.id === selectedSeason)?.title || 'this season'} yet. Check back soon for new updates!
+                </p>
               </div>
             )}
           </div>

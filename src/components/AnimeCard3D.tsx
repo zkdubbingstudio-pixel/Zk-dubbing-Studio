@@ -56,15 +56,23 @@ export default function AnimeCard3D({
   };
 
   const posterImg =
-    anime.posterUrl ||
-    anime.poster_url ||
-    anime.thumbnailUrl ||
-    anime.thumbnail_url ||
-    anime.bannerUrl ||
-    anime.banner_url ||
-    '';
+    aspectRatio === 'video'
+      ? (anime.thumbnailUrl ||
+         anime.thumbnail_url ||
+         anime.bannerUrl ||
+         anime.banner_url ||
+         anime.posterUrl ||
+         anime.poster_url ||
+         '')
+      : (anime.posterUrl ||
+         anime.poster_url ||
+         anime.thumbnailUrl ||
+         anime.thumbnail_url ||
+         anime.bannerUrl ||
+         anime.banner_url ||
+         '');
 
-  const title = anime.title || anime.episodeTitle || 'Untitled Anime';
+  const title = anime.animeTitle || anime.title || anime.episodeTitle || 'Untitled Anime';
   const isMovie = Boolean(anime.type === 'Movie' || anime.contentType === 'Movie' || anime.isMovie);
   const seasonInfo =
     badgeTopLeft ||
@@ -76,24 +84,25 @@ export default function AnimeCard3D({
       ? `Season ${anime.seasonNumber}`
       : anime.latestSeason || 'Season 1');
 
-  const destination = customPlayLink || `/anime/${anime.id}`;
+  const targetAnimeId = anime.animeId || anime.anime_id || anime.id;
+  const destination = customPlayLink || `/anime/${targetAnimeId}`;
 
   return (
     <div
       ref={cardRef}
-      className={`relative perspective-1000 group ${className}`}
+      className={`relative perspective-1000 group flex flex-col h-full ${className}`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
     >
       <Link
         to={destination}
-        state={{ anime }}
-        className="block w-full h-full outline-none focus:ring-2 focus:ring-brand rounded-2xl"
+        state={{ anime: { ...anime, id: targetAnimeId } }}
+        className="block w-full h-full outline-none focus:ring-2 focus:ring-brand rounded-2xl flex flex-col"
       >
         {/* 3D Container with physical tilt */}
         <div
-          className="relative preserve-3d transition-transform duration-200 ease-out rounded-2xl overflow-hidden glass-cyber-card border border-white/10 group-hover:border-[#00e5ff]/60 shadow-[0_10px_30px_rgba(0,0,0,0.8)] group-hover:shadow-[0_20px_40px_rgba(0,229,255,0.25)]"
+          className="relative preserve-3d transition-transform duration-200 ease-out rounded-2xl overflow-hidden glass-cyber-card border border-white/10 group-hover:border-[#00e5ff]/60 shadow-[0_10px_30px_rgba(0,0,0,0.8)] group-hover:shadow-[0_20px_40px_rgba(0,229,255,0.25)] flex flex-col h-full w-full"
           style={{
             transform: `perspective(1000px) rotateX(${rot.x}deg) rotateY(${rot.y}deg) scale3d(${
               isHovered ? 1.04 : 1
@@ -108,15 +117,15 @@ export default function AnimeCard3D({
           {/* Aspect Ratio Poster Wrapper */}
           <div
             className={`relative w-full ${
-              aspectRatio === 'video' ? 'aspect-video' : 'aspect-[2/3]'
-            } overflow-hidden bg-[#0a0e17]`}
+              aspectRatio === 'video' ? 'aspect-[16/9]' : 'aspect-[2/3]'
+            } overflow-hidden bg-[#0a0e17] shrink-0`}
           >
             {posterImg ? (
               <img
                 src={posterImg}
                 alt={title}
                 loading="lazy"
-                className="w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-110 opacity-90 group-hover:opacity-100"
+                className="w-full h-full object-cover object-center transition-transform duration-700 ease-out group-hover:scale-105 opacity-95 group-hover:opacity-100"
               />
             ) : (
               <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center bg-gradient-to-tr from-[#05070b] via-[#0a0e17] to-[#121c2d]">
@@ -224,14 +233,21 @@ export default function AnimeCard3D({
           </div>
 
           {/* Bottom Content Area */}
-          <div className="p-3 sm:p-3.5 bg-gradient-to-b from-[#0a0e17]/80 to-[#05070b]/95 backdrop-blur-md border-t border-white/5">
-            <h3 className="font-bold text-silver-light text-xs sm:text-sm md:text-base leading-snug line-clamp-2 group-hover:text-brand transition-colors duration-300">
-              {title}
-            </h3>
+          <div className="p-3 sm:p-3.5 bg-gradient-to-b from-[#0a0e17]/80 to-[#05070b]/95 backdrop-blur-md border-t border-white/5 flex-1 flex flex-col justify-between">
+            <div>
+              <h3 className="font-bold text-silver-light text-xs sm:text-sm md:text-base leading-snug line-clamp-1 group-hover:text-brand transition-colors duration-300">
+                {title}
+              </h3>
+              {aspectRatio === 'video' && anime.episodeTitle && anime.episodeTitle !== title && (
+                <p className="text-[11px] text-silver-dark line-clamp-1 mt-0.5">
+                  {anime.episodeTitle}
+                </p>
+              )}
+            </div>
             <div className="flex items-center justify-between mt-1.5 text-[11px] text-silver-dark font-medium">
               <span>{anime.releaseYear || anime.release_year || 'Latest'}</span>
               <span className="text-[#00e5ff]/90 font-semibold text-[10px] tracking-wider uppercase">
-                {anime.type || 'TV Series'}
+                {anime.type || anime.contentType || 'TV Series'}
               </span>
             </div>
           </div>

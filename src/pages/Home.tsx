@@ -240,7 +240,7 @@ export default function Home() {
               </Link>
             </div>
 
-            {/* Horizontal Scroll with 3D Tilt Cards */}
+            {/* Horizontal Scroll with 16:9 3D Tilt Cards (Equal width & height) */}
             <div className="flex overflow-x-auto snap-x snap-mandatory gap-4 sm:gap-5 pb-6 -mx-4 px-4 sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
               {newDrops.map((anime: any, index: number) => {
                 const epLabel = anime.episodeNumber ? `EP ${anime.episodeNumber}` : anime.latestEpisodeRange || 'EP 1';
@@ -250,9 +250,10 @@ export default function Home() {
                   <AnimeCard3D
                     key={anime.dropId ? `drop-${anime.dropId}` : `drop-anime-${anime.id}-${index}`}
                     anime={anime}
+                    aspectRatio="video"
                     badgeTopLeft={sLabel}
                     badgeBottomLeft={epLabel}
-                    className="flex-none w-44 sm:w-52 md:w-60 snap-start"
+                    className="flex-none w-64 sm:w-72 md:w-80 snap-start h-full"
                   />
                 );
               })}

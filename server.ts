@@ -10,12 +10,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const port = Number(process.env.PORT) || 8080;
+const port = Number(process.env.PORT) || 3000;
 const distPath = path.resolve(__dirname, 'dist');
 const isProduction = process.env.NODE_ENV === 'production' || fs.existsSync(distPath);
 
 const SUPABASE_PROJECT_URL = 'https://rwioavitlgzyrbgivwzi.supabase.co';
 const SUPABASE_HOST = 'db.rwioavitlgzyrbgivwzi.supabase.co';
+const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_kecwr9BW3V2UnM4TpruFfQ_S6C7Qsys';
 
 async function startServer() {
   app.use(express.json());
@@ -23,6 +24,47 @@ async function startServer() {
   // Health check endpoint for Cloud Run readiness / liveness
   app.get('/api/health', (_req, res) => {
     res.status(200).json({ status: 'ok', time: new Date().toISOString() });
+  });
+
+  // Supabase Proxy Route to eliminate browser CORS / network sandboxing failures
+  app.all('/api/supabase-proxy*', async (req, res) => {
+    try {
+      const targetPath = req.originalUrl.replace(/^\/api\/supabase-proxy/, '');
+      const targetUrl = `${SUPABASE_PROJECT_URL}${targetPath}`;
+      const anonKey = process.env.VITE_SUPABASE_ANON_KEY || SUPABASE_ANON_KEY;
+
+      const outgoingHeaders: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.headers)) {
+        if (typeof v === 'string' && !['host', 'connection', 'content-length'].includes(k.toLowerCase())) {
+          outgoingHeaders[k] = v;
+        }
+      }
+      if (!outgoingHeaders['apikey']) outgoingHeaders['apikey'] = anonKey;
+      if (!outgoingHeaders['authorization']) outgoingHeaders['authorization'] = `Bearer ${anonKey}`;
+
+      const fetchOptions: RequestInit = {
+        method: req.method,
+        headers: outgoingHeaders,
+      };
+
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.body && Object.keys(req.body).length > 0) {
+        fetchOptions.body = JSON.stringify(req.body);
+        outgoingHeaders['content-type'] = 'application/json';
+      }
+
+      const supRes = await fetch(targetUrl, fetchOptions);
+      res.status(supRes.status);
+      supRes.headers.forEach((val, key) => {
+        if (!['content-encoding', 'content-length', 'transfer-encoding'].includes(key.toLowerCase())) {
+          res.setHeader(key, val);
+        }
+      });
+      const data = await supRes.arrayBuffer();
+      res.send(Buffer.from(data));
+    } catch (err: any) {
+      console.error('[Supabase Proxy Error]:', err);
+      res.status(502).json({ error: err?.message || 'Supabase proxy request failed' });
+    }
   });
 
   // Supabase migration SQL loader

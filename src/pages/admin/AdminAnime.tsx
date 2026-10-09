@@ -3,12 +3,13 @@ import {
   Film, Plus, Edit2, Trash2, X, Search, Filter, Star, Flame, 
   GripVertical, CheckCircle2, AlertCircle, Sparkles, LayoutGrid, 
   Table as TableIcon, ArrowUpDown, Globe, Check, Eye, Server, Clapperboard,
-  Database, RefreshCw, Copy, ExternalLink, Play
+  Database, RefreshCw, Copy, ExternalLink, Play, Layers
 } from 'lucide-react';
 import { 
   getAllAnime, saveAnimeBoth, deleteAnimeBoth, 
   extractAbyssUrl, extractFileMoonUrl, extractVDOHideUrl,
-  detectActualTableNames, getActiveAnimeTable, triggerAutoMigration, refreshSupabaseSchemaCache
+  detectActualTableNames, getActiveAnimeTable, triggerAutoMigration, refreshSupabaseSchemaCache,
+  getSeasonsByAnimeId, saveSeasonBoth, deleteSeasonBoth
 } from '../../lib/dataService';
 import ImageUpload from '../../components/admin/ImageUpload';
 import { logAdminActivity } from '../../lib/activityLogger';
@@ -65,6 +66,25 @@ export default function AdminAnime() {
   const [dubbedBy, setDubbedBy] = useState('ZK Dubbing Studio');
   const [featured, setFeatured] = useState(false);
   const [trending, setTrending] = useState(false);
+
+  // Season Assets State (Requirements 1, 2, 3, 4, 5, 6)
+  const [seasonAssets, setSeasonAssets] = useState<{
+    id?: string;
+    seasonNumber: number;
+    title: string;
+    posterUrl: string;
+    bannerUrl: string;
+    isEditingDetails?: boolean;
+  }[]>([
+    {
+      seasonNumber: 1,
+      title: 'Season 1',
+      posterUrl: '',
+      bannerUrl: '',
+      isEditingDetails: false,
+    }
+  ]);
+  const [seasonSyncingId, setSeasonSyncingId] = useState<string | number | null>(null);
 
   // Movie Streaming Server Endpoints (One streaming server configuration: Server 1, Server 2, Server 3)
   const [server1Url, setServer1Url] = useState('');
@@ -204,6 +224,93 @@ NOTIFY pgrst, 'reload schema';`;
     setTimeout(() => setCopiedSql(false), 3000);
   };
 
+  // Season Assets Handlers (Requirements 2, 3, 4, 5, 6)
+  const handleAddSeason = () => {
+    setSeasonAssets(prev => {
+      const nextNum = prev.length > 0 
+        ? Math.max(...prev.map(s => Number(s.seasonNumber) || 1)) + 1 
+        : 1;
+      return [
+        ...prev,
+        {
+          seasonNumber: nextNum,
+          title: `Season ${nextNum}`,
+          posterUrl: '',
+          bannerUrl: '',
+          isEditingDetails: false,
+        }
+      ];
+    });
+  };
+
+  const handleToggleEditSeason = (index: number) => {
+    setSeasonAssets(prev => prev.map((s, idx) => 
+      idx === index ? { ...s, isEditingDetails: !s.isEditingDetails } : s
+    ));
+  };
+
+  const handleUpdateSeasonField = (index: number, field: 'seasonNumber' | 'title', value: any) => {
+    setSeasonAssets(prev => prev.map((s, idx) => 
+      idx === index ? { ...s, [field]: value } : s
+    ));
+  };
+
+  // Requirement 5: When Admin edits a season, only that season's poster and banner should be changed.
+  // Requirement 6: Store season poster_url and banner_url in the seasons table.
+  const handleSeasonImageChange = async (index: number, type: 'poster' | 'banner', url: string) => {
+    setSeasonAssets(prev => prev.map((s, idx) => {
+      if (idx === index) {
+        return type === 'poster' ? { ...s, posterUrl: url } : { ...s, bannerUrl: url };
+      }
+      return s;
+    }));
+
+    // If editing an existing anime and season has an ID in database, immediately persist changes to seasons table
+    const targetSeason = seasonAssets[index];
+    if (editingId && targetSeason?.id) {
+      try {
+        setSeasonSyncingId(targetSeason.id);
+        const seasonPayload = {
+          id: targetSeason.id,
+          animeId: editingId,
+          seasonNumber: Number(targetSeason.seasonNumber) || 1,
+          title: targetSeason.title?.trim() || `Season ${targetSeason.seasonNumber || 1}`,
+          posterUrl: type === 'poster' ? url : targetSeason.posterUrl,
+          poster_url: type === 'poster' ? url : targetSeason.posterUrl,
+          bannerUrl: type === 'banner' ? url : targetSeason.bannerUrl,
+          banner_url: type === 'banner' ? url : targetSeason.bannerUrl,
+          order: Number(targetSeason.seasonNumber) || 1,
+          status: 'Published',
+        };
+        await saveSeasonBoth(seasonPayload, targetSeason.id);
+      } catch (err: any) {
+        console.warn("Auto-sync season asset notice:", err);
+      } finally {
+        setSeasonSyncingId(null);
+      }
+    }
+  };
+
+  const handleDeleteSeason = async (index: number) => {
+    const target = seasonAssets[index];
+    const seasonLabel = target?.title || `Season ${target?.seasonNumber || index + 1}`;
+
+    if (window.confirm(`Are you sure you want to delete ${seasonLabel}?`)) {
+      if (target?.id && editingId) {
+        try {
+          await deleteSeasonBoth(target.id);
+          logAdminActivity('Deleted Season', 'season', `Deleted ${seasonLabel} from ${title || 'Anime'}`);
+        } catch (err: any) {
+          setError(`Failed to delete season from database: ${err?.message || String(err)}`);
+          return;
+        }
+      }
+      setSeasonAssets(prev => prev.filter((_, idx) => idx !== index));
+      setSuccessMsg(`${seasonLabel} deleted successfully.`);
+      setTimeout(() => setSuccessMsg(null), 2500);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
@@ -216,16 +323,20 @@ NOTIFY pgrst, 'reload schema';`;
       const cleanS2 = extractFileMoonUrl(server2Url);
       const cleanS3 = extractVDOHideUrl(server3Url);
 
+      // Primary poster & banner synced from Season 1 / first season asset
+      const primaryPoster = seasonAssets[0]?.posterUrl || posterUrl || '';
+      const primaryBanner = seasonAssets[0]?.bannerUrl || bannerUrl || primaryPoster || '';
+
       const animePayload = {
         title: title.trim(),
         type: contentType,
         contentType,
         isMovie: contentType === 'Movie',
         description: description.trim(),
-        posterUrl: posterUrl.trim(),
-        poster_url: posterUrl.trim(),
-        bannerUrl: bannerUrl.trim() || posterUrl.trim(),
-        banner_url: bannerUrl.trim() || posterUrl.trim(),
+        posterUrl: primaryPoster,
+        poster_url: primaryPoster,
+        bannerUrl: primaryBanner,
+        banner_url: primaryBanner,
         genres: genres.split(',').map(g => g.trim()).filter(Boolean),
         language: language.trim(),
         rating: rating.trim(),
@@ -253,10 +364,28 @@ NOTIFY pgrst, 'reload schema';`;
         videoUrl: cleanS1 || cleanS2 || cleanS3 || '',
       };
 
-      await saveAnimeBoth(animePayload, editingId || undefined);
-      logAdminActivity(editingId ? 'Updated Title' : 'Created Title', 'anime', `${contentType}: ${title.trim()}`);
+      const savedAnimeId = await saveAnimeBoth(animePayload, editingId || undefined);
 
-      setSuccessMsg(editingId ? `${contentType} updated and saved successfully!` : `${contentType} created and saved successfully!`);
+      // Save each season into the seasons table (Requirement 6)
+      for (const season of seasonAssets) {
+        const seasonPayload = {
+          id: season.id || undefined,
+          animeId: savedAnimeId,
+          seasonNumber: Number(season.seasonNumber) || 1,
+          title: season.title?.trim() || `Season ${season.seasonNumber || 1}`,
+          posterUrl: season.posterUrl || '',
+          poster_url: season.posterUrl || '',
+          bannerUrl: season.bannerUrl || '',
+          banner_url: season.bannerUrl || '',
+          order: Number(season.seasonNumber) || 1,
+          status: 'Published',
+        };
+        await saveSeasonBoth(seasonPayload, season.id || undefined);
+      }
+
+      logAdminActivity(editingId ? 'Updated Title' : 'Created Title', 'anime', `${contentType}: ${title.trim()} (${seasonAssets.length} seasons)`);
+
+      setSuccessMsg(editingId ? `${contentType} and Season Assets saved successfully!` : `${contentType} created with Season Assets successfully!`);
       setTimeout(() => setSuccessMsg(null), 3500);
 
       setShowForm(false);
@@ -317,7 +446,7 @@ NOTIFY pgrst, 'reload schema';`;
     }
   };
 
-  const openEdit = (anime: any) => {
+  const openEdit = async (anime: any) => {
     const isMovieType = anime.type === 'Movie' || anime.contentType === 'Movie' || anime.isMovie;
     setTitle(anime.title || '');
     setContentType(isMovieType ? 'Movie' : 'TV Series');
@@ -338,6 +467,37 @@ NOTIFY pgrst, 'reload schema';`;
     setServer2Url(anime.server2Url || anime.server2_url || anime.filemoonUrl || anime.filemoon_url || '');
     setServer3Url(anime.server3Url || anime.server3_url || anime.vdohideUrl || anime.vdohide_url || '');
     setEditingId(anime.id);
+
+    try {
+      const existingSeasons = await getSeasonsByAnimeId(anime.id);
+      if (existingSeasons && existingSeasons.length > 0) {
+        setSeasonAssets(existingSeasons.map((s: any) => ({
+          id: s.id,
+          seasonNumber: Number(s.seasonNumber || s.season_number || 1),
+          title: s.title || `Season ${s.seasonNumber || s.season_number || 1}`,
+          posterUrl: s.posterUrl || s.poster_url || '',
+          bannerUrl: s.bannerUrl || s.banner_url || '',
+          isEditingDetails: false,
+        })));
+      } else {
+        setSeasonAssets([{
+          seasonNumber: 1,
+          title: 'Season 1',
+          posterUrl: anime.posterUrl || anime.poster_url || '',
+          bannerUrl: anime.bannerUrl || anime.banner_url || '',
+          isEditingDetails: false,
+        }]);
+      }
+    } catch {
+      setSeasonAssets([{
+        seasonNumber: 1,
+        title: 'Season 1',
+        posterUrl: anime.posterUrl || anime.poster_url || '',
+        bannerUrl: anime.bannerUrl || anime.banner_url || '',
+        isEditingDetails: false,
+      }]);
+    }
+
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -362,6 +522,15 @@ NOTIFY pgrst, 'reload schema';`;
     setServer2Url('');
     setServer3Url('');
     setEditingId(null);
+    setSeasonAssets([
+      {
+        seasonNumber: 1,
+        title: 'Season 1',
+        posterUrl: '',
+        bannerUrl: '',
+        isEditingDetails: false,
+      }
+    ]);
   };
 
   // Drag & drop card sorting
@@ -676,7 +845,7 @@ NOTIFY pgrst, 'reload schema';`;
                 />
               </div>
 
-              <div className="md:col-span-2">
+              <div className="md:col-span-3">
                 <label className="block text-[11px] font-extrabold uppercase tracking-wider text-white/50 mb-1.5">
                   Dubbed By
                 </label>
@@ -688,14 +857,190 @@ NOTIFY pgrst, 'reload schema';`;
                   placeholder="ZK Dubbing Studio" 
                 />
               </div>
+            </div>
 
-              <div className="md:col-span-1">
-                <ImageUpload label="Upload Poster Image" value={posterUrl} onChange={setPosterUrl} folder="posters" />
+            {/* Season Assets Section (Requirements 1, 2, 3, 4, 5, 6) */}
+            <div className="p-5 md:p-6 rounded-2xl bg-black/50 border border-brand/30 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-brand" />
+                    <h3 className="text-sm font-extrabold uppercase tracking-wider text-white">Season Assets</h3>
+                    <span className="px-2 py-0.5 rounded-full bg-brand/10 border border-brand/30 text-[10px] font-black text-brand">
+                      {seasonAssets.length} {seasonAssets.length === 1 ? 'Season' : 'Seasons'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-white/50 mt-0.5">
+                    Upload season-specific posters and banners. Admin can create unlimited seasons.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleAddSeason}
+                  className="flex items-center gap-2 px-3.5 py-1.5 bg-brand text-black font-extrabold text-xs rounded-xl hover:bg-brand-hover shadow-[0_0_15px_rgba(0,229,255,0.25)] transition-all cursor-pointer self-start sm:self-auto"
+                >
+                  <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                  <span>Add Season</span>
+                </button>
               </div>
 
-              <div className="md:col-span-2">
-                <ImageUpload label="Upload Banner Image" value={bannerUrl} onChange={setBannerUrl} folder="banners" />
-              </div>
+              {seasonAssets.length === 0 ? (
+                <div className="text-center py-8 px-4 rounded-xl border border-dashed border-white/15 bg-white/5">
+                  <p className="text-xs text-white/50 mb-3">No seasons created yet for this anime.</p>
+                  <button
+                    type="button"
+                    onClick={handleAddSeason}
+                    className="px-4 py-2 bg-brand text-black font-extrabold text-xs rounded-xl hover:bg-brand-hover transition-all"
+                  >
+                    + Create Season 1
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {seasonAssets.map((season, idx) => (
+                    <div 
+                      key={season.id || `season_${idx}_${season.seasonNumber}`}
+                      className="p-4 md:p-5 rounded-2xl bg-[#111726]/80 border border-white/10 hover:border-brand/30 transition-all space-y-4 shadow-lg"
+                    >
+                      {/* Season Header Bar */}
+                      <div className="flex items-center justify-between gap-3 pb-3 border-b border-white/5">
+                        <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                          <span className="px-2.5 py-1 rounded-lg bg-brand/15 border border-brand/30 text-brand text-xs font-black tracking-wider uppercase">
+                            Season {season.seasonNumber}
+                          </span>
+                          {!season.isEditingDetails ? (
+                            <span className="text-sm font-bold text-white truncate">
+                              {season.title || `Season ${season.seasonNumber}`}
+                            </span>
+                          ) : null}
+                          {seasonSyncingId === season.id && (
+                            <span className="text-[10px] text-cyan-400 font-bold animate-pulse">
+                              Syncing...
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleEditSeason(idx)}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-colors ${
+                              season.isEditingDetails 
+                                ? 'bg-brand text-black' 
+                                : 'bg-white/5 hover:bg-white/10 text-white/80 hover:text-white border border-white/10'
+                            }`}
+                            title={season.isEditingDetails ? 'Done editing details' : 'Edit Season Number & Title'}
+                          >
+                            {season.isEditingDetails ? (
+                              <>
+                                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                <span>Done</span>
+                              </>
+                            ) : (
+                              <>
+                                <Edit2 className="w-3.5 h-3.5" />
+                                <span>Edit</span>
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSeason(idx)}
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 text-xs font-bold border border-red-500/20 transition-colors cursor-pointer"
+                            title="Delete this season"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Optional Inline Edit for Season Number and Title */}
+                      {season.isEditingDetails && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-xl bg-black/60 border border-brand/30 animate-fade-in">
+                          <div>
+                            <label className="block text-[10px] font-extrabold uppercase tracking-wider text-brand mb-1">
+                              Season Number
+                            </label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={season.seasonNumber}
+                              onChange={e => handleUpdateSeasonField(idx, 'seasonNumber', Number(e.target.value) || 1)}
+                              className="w-full bg-black/70 border border-white/15 focus:border-brand rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-extrabold uppercase tracking-wider text-brand mb-1">
+                              Season Title / Arc Name
+                            </label>
+                            <input
+                              type="text"
+                              value={season.title}
+                              onChange={e => handleUpdateSeasonField(idx, 'title', e.target.value)}
+                              placeholder={`Season ${season.seasonNumber}`}
+                              className="w-full bg-black/70 border border-white/15 focus:border-brand rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Poster & Banner Upload Grid: Example layout requested */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-cyan-300">
+                              Season {season.seasonNumber} Poster Image
+                            </span>
+                            {season.posterUrl && (
+                              <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" /> Ready
+                              </span>
+                            )}
+                          </div>
+                          <ImageUpload
+                            label={`Upload Season ${season.seasonNumber} Poster`}
+                            value={season.posterUrl}
+                            onChange={(url) => handleSeasonImageChange(idx, 'poster', url)}
+                            folder="seasons/posters"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-cyan-300">
+                              Season {season.seasonNumber} Banner Image
+                            </span>
+                            {season.bannerUrl && (
+                              <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" /> Ready
+                              </span>
+                            )}
+                          </div>
+                          <ImageUpload
+                            label={`Upload Season ${season.seasonNumber} Banner`}
+                            value={season.bannerUrl}
+                            onChange={(url) => handleSeasonImageChange(idx, 'banner', url)}
+                            folder="seasons/banners"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={handleAddSeason}
+                      className="w-full py-2.5 rounded-xl border border-dashed border-white/20 hover:border-brand/50 bg-white/5 hover:bg-brand/10 text-white/70 hover:text-brand font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Add Another Season (Unlimited)</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div>

@@ -6,7 +6,8 @@ import {
 } from 'lucide-react';
 import { 
   getAllAnime, getAllSeasons, getAllEpisodes, 
-  saveEpisodeBoth, deleteEpisodeBoth, extractAbyssUrl, extractFileMoonUrl, extractVDOHideUrl, resolveEpisodeServers 
+  saveEpisodeBoth, deleteEpisodeBoth, saveSeasonBoth,
+  extractAbyssUrl, extractFileMoonUrl, extractVDOHideUrl, resolveEpisodeServers 
 } from '../../lib/dataService';
 import ImageUpload from '../../components/admin/ImageUpload';
 import { logAdminActivity } from '../../lib/activityLogger';
@@ -94,13 +95,63 @@ export default function AdminEpisodes() {
       const cleanS2 = extractFileMoonUrl(server2Url);
       const cleanS3 = extractVDOHideUrl(server3Url);
 
-      const matchedSeason = seasons.find(s => s.id === seasonId);
-      const computedSeasonNumber = matchedSeason?.seasonNumber != null ? Number(matchedSeason.seasonNumber) : 1;
+      // Requirements 1, 2, 3, 4, 5, 7:
+      // 1. Before saving an episode, check if the selected season exists.
+      // 2. If no season exists, automatically create Season 1 for that anime.
+      // 3. Use the newly created season id as season_id.
+      // 4. Never send an invalid season_id.
+      // 5. If season_id is empty, save it as NULL instead of an invalid value.
+      let effectiveSeasonId: string | null = null;
+      let effectiveSeasonNumber = 1;
+
+      // Filter seasons belonging to the selected anime
+      const animeSeasons = seasons.filter(s => (s.animeId || s.anime_id) === animeId);
+
+      if (animeSeasons.length === 0) {
+        // Requirement 2: If no season exists, automatically create Season 1 for that anime
+        const createdSeasonId = await saveSeasonBoth({
+          animeId,
+          seasonNumber: 1,
+          title: 'Season 1',
+          order: 1,
+          status: 'Published',
+        });
+        // Requirement 3: Use the newly created season id as season_id
+        effectiveSeasonId = createdSeasonId;
+        effectiveSeasonNumber = 1;
+        setSeasonId(createdSeasonId);
+        // Update local seasons cache
+        setSeasons(prev => [...prev, {
+          id: createdSeasonId,
+          animeId,
+          seasonNumber: 1,
+          title: 'Season 1',
+          order: 1,
+          status: 'Published'
+        }]);
+      } else {
+        // Check if user selected a season and if that season exists
+        if (seasonId && seasonId.trim() !== '' && seasonId !== 's1' && seasonId !== 'null' && seasonId !== 'undefined') {
+          const matched = animeSeasons.find(s => s.id === seasonId.trim());
+          if (matched) {
+            effectiveSeasonId = matched.id;
+            effectiveSeasonNumber = Number(matched.seasonNumber || matched.season_number || 1);
+          } else {
+            // Selected season does not exist in this anime's seasons
+            // Requirement 4: Never send an invalid season_id
+            // Requirement 5: If season_id is empty or invalid, save it as NULL
+            effectiveSeasonId = null;
+          }
+        } else {
+          // Requirement 5: If season_id is empty, save it as NULL instead of an invalid value
+          effectiveSeasonId = null;
+        }
+      }
 
       const epPayload = {
         animeId,
-        seasonId,
-        seasonNumber: computedSeasonNumber,
+        seasonId: effectiveSeasonId,
+        seasonNumber: effectiveSeasonNumber,
         episodeNumber: Number(episodeNumber) || 1,
         title: title.trim(),
         description: description.trim(),
@@ -126,11 +177,13 @@ export default function AdminEpisodes() {
       await saveEpisodeBoth(epPayload, editingId || undefined);
       logAdminActivity(editingId ? 'Updated Episode' : 'Added Episode', 'episode', `Episode ${episodeNumber}: ${title || 'Untitled'}`);
 
-      setSuccessMsg(editingId ? 'Episode updated in Firestore & Supabase!' : 'Episode published in Firestore & Supabase!');
+      setSuccessMsg(editingId ? 'Episode updated in database!' : 'Episode published in database!');
       setTimeout(() => setSuccessMsg(null), 3500);
 
       resetForm();
       setShowForm(false);
+
+      // Requirement 6: After saving, refresh the episode list
       await fetchData();
     } catch (err: any) {
       console.error("Error saving episode:", err);
@@ -218,9 +271,13 @@ export default function AdminEpisodes() {
       const nextNum = highestNumInAnime + 1;
 
       const { server1, server2, server3 } = resolveEpisodeServers(ep);
+      const rawSid = ep.seasonId || ep.season_id;
+      const cleanSid = (rawSid && rawSid !== 's1' && rawSid !== 'null' && rawSid !== 'undefined') ? String(rawSid) : null;
+
       const duplicatedPayload = {
         animeId: ep.animeId || ep.anime_id,
-        seasonId: ep.seasonId || ep.season_id || '',
+        seasonId: cleanSid,
+        seasonNumber: Number(ep.seasonNumber || ep.season_number) || 1,
         episodeNumber: nextNum,
         title: `${ep.title || 'Episode'} (Copy)`,
         description: ep.description || '',
@@ -356,7 +413,9 @@ export default function AdminEpisodes() {
   const openEdit = (ep: any) => {
     const { server1, server2, server3 } = resolveEpisodeServers(ep);
     setAnimeId(ep.animeId || ep.anime_id || '');
-    setSeasonId(ep.seasonId || ep.season_id || '');
+    const rawSid = ep.seasonId || ep.season_id;
+    const cleanSid = (rawSid && rawSid !== 's1' && rawSid !== 'null' && rawSid !== 'undefined') ? String(rawSid) : '';
+    setSeasonId(cleanSid);
     setEpisodeNumber(ep.episodeNumber || ep.episode_number || 1);
     setTitle(ep.title || ep.episode_title || '');
     setDescription(ep.description || '');
