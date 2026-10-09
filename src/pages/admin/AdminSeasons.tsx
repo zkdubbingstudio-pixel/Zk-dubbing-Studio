@@ -88,7 +88,8 @@ export default function AdminSeasons() {
       await fetchData();
     } catch (err: any) {
       console.error("Error saving season:", err);
-      setError("Failed to save season.");
+      // Requirement 8: Show exact database error if saving fails
+      setError(`Database Error: ${err?.message || String(err)}`);
     } finally {
       setSaving(false);
     }
@@ -104,7 +105,7 @@ export default function AdminSeasons() {
         setTimeout(() => setSuccessMsg(null), 3000);
       } catch (err: any) {
         console.error("Error deleting season:", err);
-        setError("Failed to delete season.");
+        setError(`Database Error: ${err?.message || String(err)}`);
       }
     }
   };

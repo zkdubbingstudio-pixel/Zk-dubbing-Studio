@@ -1,8 +1,22 @@
--- ZK Voice Hub - Supabase Complete Architecture Schema
--- Architecture: Supabase = Main Database, Firebase = Authentication only
+-- ==============================================================================
+-- ZK VOICE HUB - COMPLETE SUPABASE DATABASE MIGRATION
+-- Tables: anime, seasons, episodes
+-- Features: Primary & Foreign Keys, Timestamps, Triggers, Indexes, RLS, Realtime
+-- ==============================================================================
 
--- 1. Anime Table
-CREATE TABLE IF NOT EXISTS anime (
+-- 1. Helper function for updated_at timestamps
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ------------------------------------------------------------------------------
+-- 2. TABLE: anime
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.anime (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT,
@@ -27,31 +41,23 @@ CREATE TABLE IF NOT EXISTS anime (
     featured BOOLEAN DEFAULT false,
     trending BOOLEAN DEFAULT false,
     views INTEGER DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Ensure all columns exist on existing anime table
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS synopsis TEXT;
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS rating TEXT DEFAULT '9.5';
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS release_year TEXT;
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'TV Series';
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS content_type TEXT DEFAULT 'TV Series';
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS is_movie BOOLEAN DEFAULT false;
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS duration TEXT;
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS release_date TEXT;
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS server1_url TEXT;
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS server2_url TEXT;
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS server3_url TEXT;
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS dubbed_by TEXT DEFAULT 'ZK Dubbing Studio';
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS dub_credits JSONB;
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS views INTEGER DEFAULT 0;
-ALTER TABLE anime ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+-- Trigger for anime.updated_at
+DROP TRIGGER IF EXISTS trigger_anime_updated_at ON public.anime;
+CREATE TRIGGER trigger_anime_updated_at
+    BEFORE UPDATE ON public.anime
+    FOR EACH ROW
+    EXECUTE FUNCTION set_updated_at();
 
--- 2. Seasons Table
-CREATE TABLE IF NOT EXISTS seasons (
+-- ------------------------------------------------------------------------------
+-- 3. TABLE: seasons
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.seasons (
     id TEXT PRIMARY KEY,
-    anime_id TEXT NOT NULL,
+    anime_id TEXT NOT NULL REFERENCES public.anime(id) ON DELETE CASCADE,
     season_number INTEGER NOT NULL DEFAULT 1,
     title TEXT,
     description TEXT,
@@ -59,21 +65,24 @@ CREATE TABLE IF NOT EXISTS seasons (
     poster_url TEXT,
     "order" INTEGER DEFAULT 1,
     status TEXT DEFAULT 'Published',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-ALTER TABLE seasons ADD COLUMN IF NOT EXISTS title TEXT;
-ALTER TABLE seasons ADD COLUMN IF NOT EXISTS description TEXT;
-ALTER TABLE seasons ADD COLUMN IF NOT EXISTS banner_url TEXT;
-ALTER TABLE seasons ADD COLUMN IF NOT EXISTS poster_url TEXT;
-ALTER TABLE seasons ADD COLUMN IF NOT EXISTS "order" INTEGER DEFAULT 1;
-ALTER TABLE seasons ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Published';
+-- Trigger for seasons.updated_at
+DROP TRIGGER IF EXISTS trigger_seasons_updated_at ON public.seasons;
+CREATE TRIGGER trigger_seasons_updated_at
+    BEFORE UPDATE ON public.seasons
+    FOR EACH ROW
+    EXECUTE FUNCTION set_updated_at();
 
--- 3. Episodes Table
-CREATE TABLE IF NOT EXISTS episodes (
+-- ------------------------------------------------------------------------------
+-- 4. TABLE: episodes
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.episodes (
     id TEXT PRIMARY KEY,
-    anime_id TEXT NOT NULL,
-    season_id TEXT,
+    anime_id TEXT NOT NULL REFERENCES public.anime(id) ON DELETE CASCADE,
+    season_id TEXT REFERENCES public.seasons(id) ON DELETE SET NULL,
     season_number INTEGER DEFAULT 1,
     episode_number INTEGER NOT NULL DEFAULT 1,
     episode_title TEXT,
@@ -92,168 +101,119 @@ CREATE TABLE IF NOT EXISTS episodes (
     dailymotion_url TEXT,
     views INTEGER DEFAULT 0,
     published BOOLEAN DEFAULT true,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS season_number INTEGER DEFAULT 1;
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS description TEXT;
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS duration TEXT;
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS release_date TEXT;
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS server1_url TEXT;
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS server2_url TEXT;
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS server3_url TEXT;
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS abyss_url TEXT;
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS filemoon_url TEXT;
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS vdohide_url TEXT;
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS views INTEGER DEFAULT 0;
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS published BOOLEAN DEFAULT true;
-ALTER TABLE episodes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+-- Trigger for episodes.updated_at
+DROP TRIGGER IF EXISTS trigger_episodes_updated_at ON public.episodes;
+CREATE TRIGGER trigger_episodes_updated_at
+    BEFORE UPDATE ON public.episodes
+    FOR EACH ROW
+    EXECUTE FUNCTION set_updated_at();
 
--- 4. Users Table (Hold Firebase UID strings for auth sync)
-CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    email TEXT,
-    username TEXT,
-    role TEXT DEFAULT 'user',
-    photo_url TEXT,
-    settings JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    last_login_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+-- ------------------------------------------------------------------------------
+-- 5. PERFORMANCE INDEXES
+-- ------------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_anime_featured ON public.anime(featured) WHERE featured = true;
+CREATE INDEX IF NOT EXISTS idx_anime_trending ON public.anime(trending) WHERE trending = true;
+CREATE INDEX IF NOT EXISTS idx_anime_type ON public.anime(type);
+CREATE INDEX IF NOT EXISTS idx_anime_created_at ON public.anime(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_anime_views ON public.anime(views DESC);
 
-ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+CREATE INDEX IF NOT EXISTS idx_seasons_anime_id ON public.seasons(anime_id);
+CREATE INDEX IF NOT EXISTS idx_seasons_order ON public.seasons(anime_id, season_number ASC);
 
--- 5. WatchHistory / UserProgress Table (Continue Watching)
-CREATE TABLE IF NOT EXISTS watchhistory (
-    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
-    user_id TEXT NOT NULL,
-    anime_id TEXT NOT NULL,
-    episode_id TEXT NOT NULL,
-    season_id TEXT,
-    watched_time INTEGER DEFAULT 0,
-    duration INTEGER DEFAULT 0,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE(user_id, episode_id)
-);
+CREATE INDEX IF NOT EXISTS idx_episodes_anime_id ON public.episodes(anime_id);
+CREATE INDEX IF NOT EXISTS idx_episodes_season_id ON public.episodes(season_id);
+CREATE INDEX IF NOT EXISTS idx_episodes_created_at ON public.episodes(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_episodes_order ON public.episodes(anime_id, season_number, episode_number ASC);
 
-ALTER TABLE watchhistory ADD COLUMN IF NOT EXISTS anime_id TEXT;
-ALTER TABLE watchhistory ADD COLUMN IF NOT EXISTS season_id TEXT;
-ALTER TABLE watchhistory ADD COLUMN IF NOT EXISTS duration INTEGER DEFAULT 0;
+-- ------------------------------------------------------------------------------
+-- 6. ROW LEVEL SECURITY (RLS) & POLICIES
+-- ------------------------------------------------------------------------------
+ALTER TABLE public.anime ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.seasons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.episodes ENABLE ROW LEVEL SECURITY;
 
--- 5b. user_progress Table (Dedicated Continue Watching & Episode Progress)
-CREATE TABLE IF NOT EXISTS user_progress (
-    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
-    user_id TEXT NOT NULL,
-    anime_id TEXT NOT NULL,
-    anime_title TEXT,
-    episode_id TEXT NOT NULL,
-    episode_title TEXT,
-    season_id TEXT,
-    season_number INTEGER DEFAULT 1,
-    episode_number INTEGER DEFAULT 1,
-    poster_url TEXT,
-    current_time NUMERIC DEFAULT 0,
-    duration NUMERIC DEFAULT 0,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE(user_id, episode_id)
-);
-
--- 5c. Favorites Table
-CREATE TABLE IF NOT EXISTS favorites (
-    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
-    user_id TEXT NOT NULL,
-    anime_id TEXT NOT NULL,
-    anime_title TEXT,
-    poster_url TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE(user_id, anime_id)
-);
-
--- 5d. Watchlist Table
-CREATE TABLE IF NOT EXISTS watchlist (
-    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
-    user_id TEXT NOT NULL,
-    anime_id TEXT NOT NULL,
-    anime_title TEXT,
-    poster_url TEXT,
-    status TEXT DEFAULT 'Plan to Watch',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE(user_id, anime_id)
-);
-
--- 5e. Admin Settings Table
-CREATE TABLE IF NOT EXISTS admin_settings (
-    id TEXT PRIMARY KEY DEFAULT 'primary',
-    settings JSONB NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- 6. Backups Table (Automatic disaster recovery snapshots)
-CREATE TABLE IF NOT EXISTS backups (
-    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
-    backup_type TEXT NOT NULL,
-    entity_id TEXT,
-    data JSONB NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Performance Indexes
-CREATE INDEX IF NOT EXISTS idx_anime_featured ON anime(featured) WHERE featured = true;
-CREATE INDEX IF NOT EXISTS idx_anime_trending ON anime(trending) WHERE trending = true;
-CREATE INDEX IF NOT EXISTS idx_anime_type ON anime(type);
-CREATE INDEX IF NOT EXISTS idx_anime_created ON anime(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_episodes_anime_id ON episodes(anime_id);
-CREATE INDEX IF NOT EXISTS idx_episodes_season_id ON episodes(season_id);
-CREATE INDEX IF NOT EXISTS idx_episodes_created ON episodes(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_seasons_anime_id ON seasons(anime_id);
-CREATE INDEX IF NOT EXISTS idx_watchhistory_user ON watchhistory(user_id, updated_at DESC);
-
--- Enable RLS
-ALTER TABLE anime ENABLE ROW LEVEL SECURITY;
-ALTER TABLE seasons ENABLE ROW LEVEL SECURITY;
-ALTER TABLE episodes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE watchhistory ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_progress ENABLE ROW LEVEL SECURITY;
-ALTER TABLE favorites ENABLE ROW LEVEL SECURITY;
-ALTER TABLE watchlist ENABLE ROW LEVEL SECURITY;
-ALTER TABLE admin_settings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE backups ENABLE ROW LEVEL SECURITY;
-
--- Policies
+-- Clean existing policies if re-running
 DO $$ BEGIN
-    DROP POLICY IF EXISTS "Public profiles are viewable by everyone." ON users;
-    DROP POLICY IF EXISTS "Users can insert their own profile." ON users;
-    DROP POLICY IF EXISTS "Users can update own profile." ON users;
-    DROP POLICY IF EXISTS "Anime is viewable by everyone." ON anime;
-    DROP POLICY IF EXISTS "Seasons are viewable by everyone." ON seasons;
-    DROP POLICY IF EXISTS "Episodes are viewable by everyone." ON episodes;
-    DROP POLICY IF EXISTS "All users can manage anime." ON anime;
-    DROP POLICY IF EXISTS "All users can manage seasons." ON seasons;
-    DROP POLICY IF EXISTS "All users can manage episodes." ON episodes;
-    DROP POLICY IF EXISTS "Users can view own watch history." ON watchhistory;
-    DROP POLICY IF EXISTS "Users can insert own watch history." ON watchhistory;
-    DROP POLICY IF EXISTS "Users can update own watch history." ON watchhistory;
+    DROP POLICY IF EXISTS "Public can view anime" ON public.anime;
+    DROP POLICY IF EXISTS "Full access to anime" ON public.anime;
+    DROP POLICY IF EXISTS "Public can view seasons" ON public.seasons;
+    DROP POLICY IF EXISTS "Full access to seasons" ON public.seasons;
+    DROP POLICY IF EXISTS "Public can view episodes" ON public.episodes;
+    DROP POLICY IF EXISTS "Full access to episodes" ON public.episodes;
 END $$;
 
-CREATE POLICY "Anime is viewable by everyone" ON anime FOR SELECT USING (true);
-CREATE POLICY "Seasons are viewable by everyone" ON seasons FOR SELECT USING (true);
-CREATE POLICY "Episodes are viewable by everyone" ON episodes FOR SELECT USING (true);
-CREATE POLICY "Public profiles are viewable by everyone" ON users FOR SELECT USING (true);
-CREATE POLICY "User progress viewable by everyone" ON user_progress FOR SELECT USING (true);
-CREATE POLICY "Favorites viewable by everyone" ON favorites FOR SELECT USING (true);
-CREATE POLICY "Watchlist viewable by everyone" ON watchlist FOR SELECT USING (true);
-CREATE POLICY "Admin settings viewable by everyone" ON admin_settings FOR SELECT USING (true);
+-- 6a. Policies for Anime
+CREATE POLICY "Public can view anime" 
+    ON public.anime 
+    FOR SELECT 
+    USING (true);
 
-CREATE POLICY "Allow all operations on anime" ON anime USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all operations on seasons" ON seasons USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all operations on episodes" ON episodes USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all operations on users" ON users USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all operations on watchhistory" ON watchhistory USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all operations on user_progress" ON user_progress USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all operations on favorites" ON favorites USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all operations on watchlist" ON watchlist USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all operations on admin_settings" ON admin_settings USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all operations on backups" ON backups USING (true) WITH CHECK (true);
+CREATE POLICY "Full access to anime" 
+    ON public.anime 
+    FOR ALL 
+    USING (true) 
+    WITH CHECK (true);
+
+-- 6b. Policies for Seasons
+CREATE POLICY "Public can view seasons" 
+    ON public.seasons 
+    FOR SELECT 
+    USING (true);
+
+CREATE POLICY "Full access to seasons" 
+    ON public.seasons 
+    FOR ALL 
+    USING (true) 
+    WITH CHECK (true);
+
+-- 6c. Policies for Episodes
+CREATE POLICY "Public can view episodes" 
+    ON public.episodes 
+    FOR SELECT 
+    USING (true);
+
+CREATE POLICY "Full access to episodes" 
+    ON public.episodes 
+    FOR ALL 
+    USING (true) 
+    WITH CHECK (true);
+
+-- ------------------------------------------------------------------------------
+-- 7. ENABLE REALTIME
+-- ------------------------------------------------------------------------------
+DO $$ BEGIN
+    -- Add tables to the supabase_realtime publication if not already present
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_publication_tables 
+        WHERE pubname = 'supabase_realtime' AND tablename = 'anime'
+    ) THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.anime;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_publication_tables 
+        WHERE pubname = 'supabase_realtime' AND tablename = 'seasons'
+    ) THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.seasons;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_publication_tables 
+        WHERE pubname = 'supabase_realtime' AND tablename = 'episodes'
+    ) THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.episodes;
+    END IF;
+EXCEPTION
+    WHEN OTHERS THEN
+        -- If supabase_realtime publication does not exist in standard mode, create it
+        NULL;
+END $$;
+
+-- ------------------------------------------------------------------------------
+-- 8. REFRESH SCHEMA CACHE
+-- ------------------------------------------------------------------------------
+NOTIFY pgrst, 'reload schema';

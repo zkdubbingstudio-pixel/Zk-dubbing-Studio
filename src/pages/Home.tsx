@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Flame, Sparkles, Trophy, Compass, Film, RotateCcw, AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { getFeaturedAnime, getTrendingAnime, getNewDrops, getAllAnime, isSchemaCachePending } from '../lib/dataService';
+import { getFeaturedAnime, getTrendingAnime, getNewDrops, getAllAnime, isSchemaCachePending, getActiveAnimeTable } from '../lib/dataService';
 import { checkSupabaseConnection, supabaseUrl } from '../lib/supabase';
 import HeroSlider from '../components/HeroSlider';
 import AnimeCard3D from '../components/AnimeCard3D';
@@ -62,8 +62,9 @@ export default function Home() {
       if (allAnimeRes.status === 'rejected') {
         const failureReason = (allAnimeRes as PromiseRejectedResult).reason;
         if (!isSchemaCachePending(failureReason)) {
+          const activeTable = await getActiveAnimeTable();
           console.error('[Home Page Failing Request]: Exact error from Supabase:', {
-            endpoint: `${supabaseUrl}/rest/v1/anime`,
+            endpoint: `${supabaseUrl}/rest/v1/${activeTable}`,
             error: failureReason?.message || failureReason,
           });
           setError(failureReason?.message || 'Database connection timed out or endpoint is unreachable.');
@@ -95,8 +96,9 @@ export default function Home() {
       setLoading(false);
       setRetrying(false);
     } catch (err: any) {
+      const activeTable = await getActiveAnimeTable();
       console.error('[Home Page Failing Request]: Exact error from Supabase:', {
-        endpoint: `${supabaseUrl}/rest/v1/anime`,
+        endpoint: `${supabaseUrl}/rest/v1/${activeTable}`,
         error: err?.message || err,
       });
       setError(err?.message || 'Failed to connect to Supabase. Request timed out or host is unreachable.');

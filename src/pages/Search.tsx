@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Search as SearchIcon, Filter, Sparkles, Film } from 'lucide-react';
 import { supabase, executeSupabaseWithRetry } from '../lib/supabase';
-import { normalizeAnime, getGenres } from '../lib/dataService';
+import { normalizeAnime, getGenres, getActiveAnimeTable, getLocalAnimeList } from '../lib/dataService';
 import AnimeCard3D from '../components/AnimeCard3D';
 import GenreChipsBar from '../components/GenreChipsBar';
 
@@ -26,20 +26,26 @@ export default function Search() {
     };
   }, []);
 
-  // Search directly in Supabase
+  // Search directly in Supabase (reads from detected active table - Requirement 1, 2, 7)
   useEffect(() => {
     let isMounted = true;
 
     const fetchSearch = async () => {
       setLoading(true);
       try {
-        const cleanQuery = query.trim();
+        const cleanQuery = query.trim().toLowerCase();
+        const activeTable = await getActiveAnimeTable();
+        const localList = getLocalAnimeList().filter(a => {
+          const matchTitle = !cleanQuery || a.title.toLowerCase().includes(cleanQuery);
+          const matchGenre = selectedGenre === 'All' || (Array.isArray(a.genres) && a.genres.some((g: string) => g.toLowerCase() === selectedGenre.toLowerCase()));
+          return matchTitle && matchGenre;
+        });
 
         const res = await executeSupabaseWithRetry(async () => {
-          let q = supabase.from('anime').select('*');
+          let q = supabase.from(activeTable).select('*');
 
-          if (cleanQuery) {
-            q = q.ilike('title', `%${cleanQuery}%`);
+          if (query.trim()) {
+            q = q.ilike('title', `%${query.trim()}%`);
           }
 
           if (selectedGenre !== 'All') {
@@ -51,15 +57,24 @@ export default function Search() {
 
         if (isMounted) {
           if (res?.data && res.data.length > 0) {
-            setResults(res.data.map((item: any) => normalizeAnime(item, item.id)));
+            const remote = res.data.map((item: any) => normalizeAnime(item, item.id));
+            const remoteIds = new Set(remote.map(r => r.id));
+            const unSynced = localList.filter(l => !remoteIds.has(l.id));
+            setResults([...unSynced, ...remote]);
           } else {
-            setResults([]);
+            setResults(localList);
           }
           setLoading(false);
         }
       } catch (err) {
         if (isMounted) {
-          setResults([]);
+          const cleanQuery = query.trim().toLowerCase();
+          const localList = getLocalAnimeList().filter(a => {
+            const matchTitle = !cleanQuery || a.title.toLowerCase().includes(cleanQuery);
+            const matchGenre = selectedGenre === 'All' || (Array.isArray(a.genres) && a.genres.some((g: string) => g.toLowerCase() === selectedGenre.toLowerCase()));
+            return matchTitle && matchGenre;
+          });
+          setResults(localList);
           setLoading(false);
         }
       }

@@ -1,7 +1,7 @@
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Play, SkipForward, SkipBack, Server } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { getEpisodeById, getAnimeById, getSeasonsByAnimeId, getEpisodesByAnimeId, resolveEpisodeServers, saveUserProgress } from '../lib/dataService';
+import { getEpisodeById, getAnimeById, getSeasonsByAnimeId, getEpisodesByAnimeId, resolveEpisodeServers, saveUserProgress, getActiveEpisodesTable, getActiveAnimeTable } from '../lib/dataService';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
 
@@ -58,11 +58,13 @@ export default function WatchPage() {
     const trackView = async () => {
       try {
         const epViews = ((episode.views || 0) + 1);
-        await supabase.from('episodes').update({ views: epViews }).eq('id', epId);
+        const epTable = await getActiveEpisodesTable();
+        await supabase.from(epTable).update({ views: epViews }).eq('id', epId);
         const anId = episode.animeId || episode.anime_id;
         if (anId) {
           const anViews = ((anime?.views || 0) + 1);
-          await supabase.from('anime').update({ views: anViews }).eq('id', anId);
+          const anTable = await getActiveAnimeTable();
+          await supabase.from(anTable).update({ views: anViews }).eq('id', anId);
         }
       } catch (err) {
         // Safe to ignore if offline

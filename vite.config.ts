@@ -20,6 +20,11 @@ export default defineConfig(() => {
           ? process.env.VITE_SUPABASE_URL
           : 'https://rwioavitlgzyrbgivwzi.supabase.co'
       ),
+      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(
+        process.env.VITE_SUPABASE_ANON_KEY && !process.env.VITE_SUPABASE_ANON_KEY.includes('placeholder')
+          ? process.env.VITE_SUPABASE_ANON_KEY
+          : 'sb_publishable_kecwr9BW3V2UnM4TpruFfQ_S6C7Qsys'
+      ),
     },
     build: {
       rollupOptions: {

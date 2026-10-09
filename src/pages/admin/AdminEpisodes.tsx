@@ -134,7 +134,8 @@ export default function AdminEpisodes() {
       await fetchData();
     } catch (err: any) {
       console.error("Error saving episode:", err);
-      setError("Failed to save episode.");
+      // Requirement 8: Show exact database error if saving fails
+      setError(`Database Error: ${err?.message || String(err)}`);
     } finally {
       setSaving(false);
     }

@@ -124,11 +124,12 @@ export async function checkSupabaseConnection(): Promise<{ ok: boolean; message:
     };
   }
   try {
-    const { error } = await supabase.from('anime').select('id', { count: 'exact', head: true });
+    const table = (typeof window !== 'undefined' && localStorage.getItem('zk_active_anime_table')) || 'anime';
+    const { error } = await supabase.from(table).select('id', { count: 'exact', head: true });
     if (error) {
       // PGRST205 indicates successful connection and valid auth, but tables are pending in the new database
       if (error.code === 'PGRST205' || error.message?.includes('schema cache')) {
-        return { ok: true, message: 'Connected (Schema cache pending tables)', latencyMs: Date.now() - start };
+        return { ok: true, message: `Connected (Table '${table}' in schema cache verification)`, latencyMs: Date.now() - start };
       }
       return { ok: false, message: error.message || 'Supabase query returned error' };
     }

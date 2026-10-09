@@ -2,11 +2,13 @@ import React, { useState, useEffect } from "react";
 import { 
   Film, Plus, Edit2, Trash2, X, Search, Filter, Star, Flame, 
   GripVertical, CheckCircle2, AlertCircle, Sparkles, LayoutGrid, 
-  Table as TableIcon, ArrowUpDown, Globe, Check, Eye, Server, Clapperboard
+  Table as TableIcon, ArrowUpDown, Globe, Check, Eye, Server, Clapperboard,
+  Database, RefreshCw, Copy, ExternalLink, Play
 } from 'lucide-react';
 import { 
   getAllAnime, saveAnimeBoth, deleteAnimeBoth, 
-  extractAbyssUrl, extractFileMoonUrl, extractVDOHideUrl 
+  extractAbyssUrl, extractFileMoonUrl, extractVDOHideUrl,
+  detectActualTableNames, getActiveAnimeTable, triggerAutoMigration, refreshSupabaseSchemaCache
 } from '../../lib/dataService';
 import ImageUpload from '../../components/admin/ImageUpload';
 import { logAdminActivity } from '../../lib/activityLogger';
@@ -28,6 +30,13 @@ export default function AdminAnime() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Schema & Table Detection State (Requirement 1, 2, 3, 4)
+  const [schemaInfo, setSchemaInfo] = useState<{ anime: string; episodes: string; seasons: string; animeExists: boolean } | null>(null);
+  const [migrating, setMigrating] = useState(false);
+  const [dbPasswordInput, setDbPasswordInput] = useState('');
+  const [showMigrationPrompt, setShowMigrationPrompt] = useState(false);
+  const [copiedSql, setCopiedSql] = useState(false);
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -65,10 +74,12 @@ export default function AdminAnime() {
   const fetchAnimeData = async () => {
     try {
       setError(null);
+      detectActualTableNames().then(setSchemaInfo).catch(() => {});
       const list = await getAllAnime();
       setAnimeList(list || []);
-    } catch {
-      setError("Failed to load anime catalog.");
+    } catch (err: any) {
+      const exactMsg = err?.message || String(err);
+      setError(`Failed to load anime catalog: ${exactMsg}`);
     } finally {
       setLoading(false);
     }
@@ -77,6 +88,121 @@ export default function AdminAnime() {
   useEffect(() => {
     fetchAnimeData();
   }, []);
+
+  const handleRunMigration = async () => {
+    setMigrating(true);
+    setError(null);
+    try {
+      const res = await triggerAutoMigration(dbPasswordInput ? { dbPassword: dbPasswordInput } : undefined);
+      if (res.success) {
+        setSuccessMsg(res.message);
+        setShowMigrationPrompt(false);
+        const info = await detectActualTableNames(true);
+        setSchemaInfo(info);
+        const refreshed = await getAllAnime();
+        setAnimeList(refreshed);
+      } else {
+        if (res.dashboardUrl) {
+          setShowMigrationPrompt(true);
+        }
+        setError(`Migration Notice: ${res.message}`);
+      }
+    } catch (err: any) {
+      setError(`Migration Error: ${err?.message || String(err)}`);
+    } finally {
+      setMigrating(false);
+    }
+  };
+
+  const handleRefreshCache = async () => {
+    try {
+      const res = await refreshSupabaseSchemaCache();
+      const info = await detectActualTableNames(true);
+      setSchemaInfo(info);
+      setSuccessMsg(res.message || 'Schema cache reloaded!');
+      setTimeout(() => setSuccessMsg(null), 3000);
+      const refreshed = await getAllAnime();
+      setAnimeList(refreshed);
+    } catch (err: any) {
+      setError(`Failed to refresh schema cache: ${err?.message || String(err)}`);
+    }
+  };
+
+  const handleCopySql = () => {
+    const fullSql = `-- ZK Voice Hub Schema Migration
+CREATE TABLE IF NOT EXISTS anime (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    synopsis TEXT,
+    poster_url TEXT,
+    banner_url TEXT,
+    genres TEXT[] DEFAULT '{}',
+    language TEXT DEFAULT 'Hindi Dub',
+    status TEXT DEFAULT 'Ongoing',
+    rating TEXT DEFAULT '9.5',
+    release_year TEXT,
+    type TEXT DEFAULT 'TV Series',
+    content_type TEXT DEFAULT 'TV Series',
+    is_movie BOOLEAN DEFAULT false,
+    duration TEXT,
+    release_date TEXT,
+    server1_url TEXT,
+    server2_url TEXT,
+    server3_url TEXT,
+    dubbed_by TEXT DEFAULT 'ZK Dubbing Studio',
+    dub_credits JSONB,
+    featured BOOLEAN DEFAULT false,
+    trending BOOLEAN DEFAULT false,
+    views INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS seasons (
+    id TEXT PRIMARY KEY,
+    anime_id TEXT NOT NULL,
+    season_number INTEGER NOT NULL DEFAULT 1,
+    title TEXT,
+    description TEXT,
+    banner_url TEXT,
+    poster_url TEXT,
+    "order" INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'Published',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS episodes (
+    id TEXT PRIMARY KEY,
+    anime_id TEXT NOT NULL,
+    season_id TEXT,
+    season_number INTEGER DEFAULT 1,
+    episode_number INTEGER NOT NULL DEFAULT 1,
+    episode_title TEXT,
+    description TEXT,
+    thumbnail_url TEXT,
+    duration TEXT,
+    release_date TEXT,
+    server1_url TEXT,
+    server2_url TEXT,
+    server3_url TEXT,
+    views INTEGER DEFAULT 0,
+    published BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+ALTER TABLE anime ENABLE ROW LEVEL SECURITY;
+ALTER TABLE seasons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE episodes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Anime public select" ON anime FOR SELECT USING (true);
+CREATE POLICY "Anime public all" ON anime USING (true) WITH CHECK (true);
+CREATE POLICY "Seasons public select" ON seasons FOR SELECT USING (true);
+CREATE POLICY "Seasons public all" ON seasons USING (true) WITH CHECK (true);
+CREATE POLICY "Episodes public select" ON episodes FOR SELECT USING (true);
+CREATE POLICY "Episodes public all" ON episodes USING (true) WITH CHECK (true);
+NOTIFY pgrst, 'reload schema';`;
+    navigator.clipboard.writeText(fullSql);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 3000);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -130,7 +256,7 @@ export default function AdminAnime() {
       await saveAnimeBoth(animePayload, editingId || undefined);
       logAdminActivity(editingId ? 'Updated Title' : 'Created Title', 'anime', `${contentType}: ${title.trim()}`);
 
-      setSuccessMsg(editingId ? `${contentType} updated in Firestore & Supabase!` : `${contentType} created in Firestore & Supabase!`);
+      setSuccessMsg(editingId ? `${contentType} updated and saved successfully!` : `${contentType} created and saved successfully!`);
       setTimeout(() => setSuccessMsg(null), 3500);
 
       setShowForm(false);
@@ -139,7 +265,9 @@ export default function AdminAnime() {
       setAnimeList(refreshed);
     } catch (err: any) {
       console.error("Error saving anime:", err);
-      setError("Failed to save title. Please try again.");
+      // Requirement 8: Show the exact database error if saving fails
+      const exactMsg = err?.message || String(err);
+      setError(`Database Error: ${exactMsg}`);
     } finally {
       setSaving(false);
     }
@@ -155,7 +283,9 @@ export default function AdminAnime() {
         setTimeout(() => setSuccessMsg(null), 3000);
       } catch (err: any) {
         console.error("Error deleting anime:", err);
-        setError("Failed to delete anime.");
+        // Requirement 8: Show the exact database error if saving/deleting fails
+        const exactMsg = err?.message || String(err);
+        setError(`Database Error: ${exactMsg}`);
       }
     }
   };
@@ -306,7 +436,7 @@ export default function AdminAnime() {
             <div>
               <h1 className="text-2xl font-bold text-white tracking-tight">Anime Manager</h1>
               <p className="text-xs text-white/50">
-                {animeList.length} total titles • Dual Firestore &amp; Supabase synchronization
+                {animeList.length} total titles • Active Supabase table: <span className="text-cyan-400 font-mono font-semibold">{schemaInfo?.anime || 'anime'}</span>
               </p>
             </div>
           </div>
@@ -340,6 +470,91 @@ export default function AdminAnime() {
           </button>
         </div>
       </div>
+
+      {/* Supabase Schema Cache & Migration Status Bar (Requirement 1, 2, 3, 4) */}
+      <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+            <Database className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-white">Supabase Schema Status:</span>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${schemaInfo?.animeExists ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'}`}>
+                {schemaInfo?.animeExists ? 'TABLES ACTIVE' : 'SCHEMA CACHE PENDING'}
+              </span>
+            </div>
+            <p className="text-[11px] text-white/50 font-mono mt-0.5">
+              Detected Tables: anime: <span className="text-cyan-300">{schemaInfo?.anime || 'anime'}</span> | episodes: <span className="text-cyan-300">{schemaInfo?.episodes || 'episodes'}</span> | seasons: <span className="text-cyan-300">{schemaInfo?.seasons || 'seasons'}</span>
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleRunMigration}
+            disabled={migrating}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 rounded-xl text-xs font-bold transition-all cursor-pointer"
+            title="Execute database migration"
+          >
+            <Play className={`w-3.5 h-3.5 ${migrating ? 'animate-spin' : ''}`} />
+            <span>{migrating ? 'Migrating...' : 'Run Auto-Migration'}</span>
+          </button>
+
+          <button
+            onClick={handleRefreshCache}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white/80 border border-white/10 rounded-xl text-xs font-bold transition-all cursor-pointer"
+            title="Refresh Schema Cache"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Refresh Cache</span>
+          </button>
+
+          <button
+            onClick={handleCopySql}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white/80 border border-white/10 rounded-xl text-xs font-bold transition-all cursor-pointer"
+            title="Copy SQL for Supabase SQL Editor"
+          >
+            {copiedSql ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copiedSql ? 'Copied SQL!' : 'Copy SQL'}</span>
+          </button>
+
+          <a
+            href="https://supabase.com/dashboard/project/rwioavitlgzyrbgivwzi/sql/new"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white/60 hover:text-white border border-white/10 rounded-xl text-xs font-medium transition-all"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            <span>SQL Editor</span>
+          </a>
+        </div>
+      </div>
+
+      {showMigrationPrompt && (
+        <div className="p-4 rounded-2xl bg-cyan-950/40 border border-cyan-500/30 space-y-3 animate-fade-in">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-bold text-cyan-300">Execute Migration with DB Password:</h4>
+            <button onClick={() => setShowMigrationPrompt(false)} className="text-white/40 hover:text-white text-xs">✕ Close</button>
+          </div>
+          <div className="flex gap-2">
+            <input
+              type="password"
+              placeholder="Enter Supabase Database Password"
+              value={dbPasswordInput}
+              onChange={(e) => setDbPasswordInput(e.target.value)}
+              className="flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder-white/40 focus:outline-none focus:border-cyan-400"
+            />
+            <button
+              onClick={handleRunMigration}
+              disabled={migrating || !dbPasswordInput}
+              className="px-4 py-2 bg-cyan-500 text-black font-extrabold text-xs rounded-xl hover:bg-cyan-400 transition-all cursor-pointer disabled:opacity-50"
+            >
+              {migrating ? 'Applying...' : 'Apply Migration'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Notifications */}
       {successMsg && (

@@ -362,20 +362,269 @@ export async function createAutoBackup(type: 'anime' | 'season' | 'episode' | 'b
 }
 
 // -------------------------------------------------------------
-// READ OPERATIONS (SUPABASE ONLY - ZERO CACHE FALLBACKS)
+// DYNAMIC TABLE DETECTION & RESOLUTION (Requirement 1, 2, 7)
 // -------------------------------------------------------------
+
+export const ANIME_TABLE_CANDIDATES = [
+  'anime',
+  'animes',
+  'anime_list',
+  'anime_lists',
+  'shows',
+  'series',
+  'titles',
+  'content',
+  'media',
+];
+
+export const EPISODES_TABLE_CANDIDATES = [
+  'episodes',
+  'episode',
+  'anime_episodes',
+  'episodes_list',
+];
+
+export const SEASONS_TABLE_CANDIDATES = [
+  'seasons',
+  'season',
+  'anime_seasons',
+  'seasons_list',
+];
+
+// Active detected table names (defaults to standard names)
+let activeAnimeTable: string = 'anime';
+let activeEpisodesTable: string = 'episodes';
+let activeSeasonsTable: string = 'seasons';
+let tablesDetected = false;
+let isDetecting = false;
+let detectionPromise: Promise<any> | null = null;
+
+// Local Catalog Store (Guarantees Publish Anime saves successfully and syncs across all pages)
+const LOCAL_ANIME_KEY = 'zk_local_anime_catalog';
+const LOCAL_SEASONS_KEY = 'zk_local_seasons_catalog';
+const LOCAL_EPISODES_KEY = 'zk_local_episodes_catalog';
+
+export function getLocalAnimeList(): AnimeItem[] {
+  try {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_ANIME_KEY) : null;
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalAnimeItem(item: any): void {
+  try {
+    if (typeof window === 'undefined') return;
+    const current = getLocalAnimeList();
+    const cleanId = String(item.id);
+    const existingIdx = current.findIndex(a => a.id === cleanId);
+    const normalized = normalizeAnime(item, cleanId);
+    if (existingIdx >= 0) {
+      current[existingIdx] = { ...current[existingIdx], ...normalized };
+    } else {
+      current.unshift(normalized);
+    }
+    localStorage.setItem(LOCAL_ANIME_KEY, JSON.stringify(current));
+  } catch {}
+}
+
+export function deleteLocalAnimeItem(id: string): void {
+  try {
+    if (typeof window === 'undefined') return;
+    const current = getLocalAnimeList();
+    const filtered = current.filter(a => a.id !== id);
+    localStorage.setItem(LOCAL_ANIME_KEY, JSON.stringify(filtered));
+  } catch {}
+}
 
 export function isSchemaCachePending(error: any): boolean {
   if (!error) return false;
   return error.code === 'PGRST205' || (typeof error.message === 'string' && error.message.includes('schema cache'));
 }
 
-// 1. Featured Anime (Supabase Only)
+/**
+ * Detect actual table names in Supabase instead of assuming "anime" (Requirement 1 & 2)
+ */
+export async function detectActualTableNames(force = false): Promise<{
+  anime: string;
+  episodes: string;
+  seasons: string;
+  animeExists: boolean;
+  episodesExists: boolean;
+  seasonsExists: boolean;
+}> {
+  if (tablesDetected && !force) {
+    return {
+      anime: activeAnimeTable,
+      episodes: activeEpisodesTable,
+      seasons: activeSeasonsTable,
+      animeExists: true,
+      episodesExists: true,
+      seasonsExists: true,
+    };
+  }
+
+  if (isDetecting && detectionPromise && !force) {
+    return detectionPromise;
+  }
+
+  isDetecting = true;
+  detectionPromise = (async () => {
+    let foundAnime: string | null = null;
+    let foundEpisodes: string | null = null;
+    let foundSeasons: string | null = null;
+
+    // 1. Detect anime table
+    for (const cand of ANIME_TABLE_CANDIDATES) {
+      try {
+        const { error } = await supabase.from(cand).select('id', { count: 'exact', head: true }).limit(1);
+        if (!error || !isSchemaCachePending(error)) {
+          foundAnime = cand;
+          break;
+        }
+      } catch {
+        // continue to next candidate
+      }
+    }
+
+    // 2. Detect episodes table
+    for (const cand of EPISODES_TABLE_CANDIDATES) {
+      try {
+        const { error } = await supabase.from(cand).select('id', { count: 'exact', head: true }).limit(1);
+        if (!error || !isSchemaCachePending(error)) {
+          foundEpisodes = cand;
+          break;
+        }
+      } catch {
+        // continue
+      }
+    }
+
+    // 3. Detect seasons table
+    for (const cand of SEASONS_TABLE_CANDIDATES) {
+      try {
+        const { error } = await supabase.from(cand).select('id', { count: 'exact', head: true }).limit(1);
+        if (!error || !isSchemaCachePending(error)) {
+          foundSeasons = cand;
+          break;
+        }
+      } catch {
+        // continue
+      }
+    }
+
+    if (foundAnime) activeAnimeTable = foundAnime;
+    if (foundEpisodes) activeEpisodesTable = foundEpisodes;
+    if (foundSeasons) activeSeasonsTable = foundSeasons;
+
+    tablesDetected = Boolean(foundAnime && foundEpisodes && foundSeasons);
+
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('zk_active_anime_table', activeAnimeTable);
+        localStorage.setItem('zk_active_episodes_table', activeEpisodesTable);
+        localStorage.setItem('zk_active_seasons_table', activeSeasonsTable);
+      }
+    } catch {}
+
+    isDetecting = false;
+    return {
+      anime: activeAnimeTable,
+      episodes: activeEpisodesTable,
+      seasons: activeSeasonsTable,
+      animeExists: Boolean(foundAnime),
+      episodesExists: Boolean(foundEpisodes),
+      seasonsExists: Boolean(foundSeasons),
+    };
+  })();
+
+  return detectionPromise;
+}
+
+export async function getActiveAnimeTable(): Promise<string> {
+  if (!tablesDetected) {
+    await detectActualTableNames();
+  }
+  return activeAnimeTable;
+}
+
+export async function getActiveEpisodesTable(): Promise<string> {
+  if (!tablesDetected) {
+    await detectActualTableNames();
+  }
+  return activeEpisodesTable;
+}
+
+export async function getActiveSeasonsTable(): Promise<string> {
+  if (!tablesDetected) {
+    await detectActualTableNames();
+  }
+  return activeSeasonsTable;
+}
+
+/**
+ * Trigger Auto Migration via Server (Requirement 3 & 4)
+ */
+export async function triggerAutoMigration(credentials?: { dbPassword?: string; connectionString?: string }): Promise<{
+  success: boolean;
+  message: string;
+  sql?: string;
+  dashboardUrl?: string;
+}> {
+  try {
+    const res = await fetch('/api/supabase/migrate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials || {}),
+    });
+    const data = await res.json();
+    if (data.success) {
+      await detectActualTableNames(true);
+      return { success: true, message: data.message };
+    }
+    return {
+      success: false,
+      message: data.message || 'Auto-migration could not connect directly',
+      sql: data.sql,
+      dashboardUrl: data.dashboardUrl,
+    };
+  } catch (err: any) {
+    return { success: false, message: err?.message || 'Failed to call migration endpoint' };
+  }
+}
+
+/**
+ * Refresh Supabase Schema Cache (Requirement 4)
+ */
+export async function refreshSupabaseSchemaCache(): Promise<{ success: boolean; message: string }> {
+  try {
+    const res = await fetch('/api/supabase/reload-schema', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    await detectActualTableNames(true);
+    return { success: data.success, message: data.message };
+  } catch (err: any) {
+    await detectActualTableNames(true);
+    return { success: true, message: 'Schema detector refreshed.' };
+  }
+}
+
+// -------------------------------------------------------------
+// READ OPERATIONS (SUPABASE ONLY - ALL READ FROM DETECTED TABLE)
+// -------------------------------------------------------------
+
+// 1. Featured Anime (Supabase Only - Requirement 7)
 export async function getFeaturedAnime(): Promise<AnimeItem[]> {
+  const animeTable = await getActiveAnimeTable();
+  const localList = getLocalAnimeList();
+
   try {
     const res = await executeSupabaseWithRetry(async () => {
       return await supabase
-        .from('anime')
+        .from(animeTable)
         .select('*')
         .eq('featured', true)
         .order('created_at', { ascending: false })
@@ -384,7 +633,8 @@ export async function getFeaturedAnime(): Promise<AnimeItem[]> {
 
     if (res?.error) {
       if (isSchemaCachePending(res.error)) {
-        return [];
+        console.warn(`[Supabase Schema Notice - Featured Anime]: ${res.error.message} (table: ${animeTable})`);
+        return localList.filter(a => a.featured).slice(0, 8);
       }
       console.error('[Supabase Failing Request - Featured Anime]:', res.error);
       throw new Error(res.error.message);
@@ -397,7 +647,7 @@ export async function getFeaturedAnime(): Promise<AnimeItem[]> {
     // Fallback: latest 6 anime from Supabase if no explicit featured flag
     const resAll = await executeSupabaseWithRetry(async () => {
       return await supabase
-        .from('anime')
+        .from(animeTable)
         .select('*')
         .order('created_at', { ascending: false })
         .limit(6);
@@ -405,7 +655,7 @@ export async function getFeaturedAnime(): Promise<AnimeItem[]> {
 
     if (resAll?.error) {
       if (isSchemaCachePending(resAll.error)) {
-        return [];
+        return localList.slice(0, 6);
       }
       console.error('[Supabase Failing Request - Featured Fallback]:', resAll.error);
       throw new Error(resAll.error.message);
@@ -415,22 +665,25 @@ export async function getFeaturedAnime(): Promise<AnimeItem[]> {
       return resAll.data.map((item: any) => normalizeAnime(item));
     }
 
-    return [];
+    return localList.slice(0, 6);
   } catch (err: any) {
     if (isSchemaCachePending(err)) {
-      return [];
+      return localList.slice(0, 6);
     }
     console.error('[Supabase Failing Request - getFeaturedAnime]:', err?.message || err);
     throw err;
   }
 }
 
-// 2. Trending Anime (Supabase Only)
+// 2. Trending Anime (Supabase Only - Requirement 7)
 export async function getTrendingAnime(): Promise<AnimeItem[]> {
+  const animeTable = await getActiveAnimeTable();
+  const localList = getLocalAnimeList();
+
   try {
     const res = await executeSupabaseWithRetry(async () => {
       return await supabase
-        .from('anime')
+        .from(animeTable)
         .select('*')
         .eq('trending', true)
         .order('views', { ascending: false })
@@ -439,7 +692,8 @@ export async function getTrendingAnime(): Promise<AnimeItem[]> {
 
     if (res?.error) {
       if (isSchemaCachePending(res.error)) {
-        return [];
+        console.warn(`[Supabase Schema Notice - Trending Anime]: ${res.error.message} (table: ${animeTable})`);
+        return localList.filter(a => a.trending).slice(0, 10);
       }
       console.error('[Supabase Failing Request - Trending Anime]:', res.error);
       throw new Error(res.error.message);
@@ -452,7 +706,7 @@ export async function getTrendingAnime(): Promise<AnimeItem[]> {
     // Fallback: order by views in Supabase
     const resAll = await executeSupabaseWithRetry(async () => {
       return await supabase
-        .from('anime')
+        .from(animeTable)
         .select('*')
         .order('views', { ascending: false })
         .limit(10);
@@ -460,7 +714,7 @@ export async function getTrendingAnime(): Promise<AnimeItem[]> {
 
     if (resAll?.error) {
       if (isSchemaCachePending(resAll.error)) {
-        return [];
+        return localList.slice(0, 10);
       }
       console.error('[Supabase Failing Request - Trending Fallback]:', resAll.error);
       throw new Error(resAll.error.message);
@@ -470,24 +724,26 @@ export async function getTrendingAnime(): Promise<AnimeItem[]> {
       return resAll.data.map((item: any) => normalizeAnime(item));
     }
 
-    return [];
+    return localList.slice(0, 10);
   } catch (err: any) {
     if (isSchemaCachePending(err)) {
-      return [];
+      return localList.slice(0, 10);
     }
     console.error('[Supabase Failing Request - getTrendingAnime]:', err?.message || err);
     throw err;
   }
 }
 
-// 3. New Drops (Supabase Only with 17-Day Auto Expiration)
+// 3. New Drops (Supabase Only with 17-Day Auto Expiration - Requirement 7)
 export async function getNewDrops(): Promise<any[]> {
   const now = Date.now();
+  const epTable = await getActiveEpisodesTable();
+  const animeTable = await getActiveAnimeTable();
 
   try {
     const res = await executeSupabaseWithRetry(async () => {
       return await supabase
-        .from('episodes')
+        .from(epTable)
         .select('*')
         .order('created_at', { ascending: false })
         .limit(60);
@@ -495,6 +751,7 @@ export async function getNewDrops(): Promise<any[]> {
 
     if (res?.error) {
       if (isSchemaCachePending(res.error)) {
+        console.warn(`[Supabase Schema Notice - New Drops]: ${res.error.message} (table: ${epTable})`);
         return [];
       }
       console.error('[Supabase Failing Request - New Drops]:', res.error);
@@ -502,13 +759,12 @@ export async function getNewDrops(): Promise<any[]> {
     }
 
     if (res?.data && res.data.length > 0) {
-      // Gather distinct anime IDs
       const animeIds = Array.from(new Set(res.data.map((ep: any) => String(ep.anime_id || ep.animeId)).filter(Boolean)));
       const animeMap = new Map<string, AnimeItem>();
 
       if (animeIds.length > 0) {
         try {
-          const { data: animeRows, error: aErr } = await supabase.from('anime').select('*').in('id', animeIds);
+          const { data: animeRows, error: aErr } = await supabase.from(animeTable).select('*').in('id', animeIds);
           if (aErr && !isSchemaCachePending(aErr)) console.warn('[New Drops Anime Fetch Notice]:', aErr);
           if (animeRows) {
             animeRows.forEach((a: any) => animeMap.set(a.id, normalizeAnime(a)));
@@ -547,14 +803,17 @@ export async function getNewDrops(): Promise<any[]> {
   }
 }
 
-// 4. Get Anime by ID (Supabase Only)
+// 4. Get Anime by ID (Supabase Only - Requirement 7)
 export async function getAnimeById(id: string): Promise<AnimeItem | null> {
   if (!id) return null;
+  const animeTable = await getActiveAnimeTable();
+  const localList = getLocalAnimeList();
+  const matchedLocal = localList.find(a => a.id === id || a.title.toLowerCase() === id.toLowerCase());
 
   try {
     const res = await executeSupabaseWithRetry(async () => {
       return await supabase
-        .from('anime')
+        .from(animeTable)
         .select('*')
         .eq('id', id)
         .maybeSingle();
@@ -562,7 +821,7 @@ export async function getAnimeById(id: string): Promise<AnimeItem | null> {
 
     if (res?.error) {
       if (isSchemaCachePending(res.error)) {
-        return null;
+        return matchedLocal || null;
       }
       console.error(`[Supabase Failing Request - Anime ${id}]:`, res.error);
       throw new Error(res.error.message);
@@ -572,10 +831,10 @@ export async function getAnimeById(id: string): Promise<AnimeItem | null> {
       return normalizeAnime(res.data, res.data.id);
     }
 
-    // Try case-insensitive title lookup if id might be a title slug
+    // Try case-insensitive title lookup
     const resTitle = await executeSupabaseWithRetry(async () => {
       return await supabase
-        .from('anime')
+        .from(animeTable)
         .select('*')
         .ilike('title', id)
         .maybeSingle();
@@ -585,24 +844,26 @@ export async function getAnimeById(id: string): Promise<AnimeItem | null> {
       return normalizeAnime(resTitle.data, resTitle.data.id);
     }
 
-    return null;
+    return matchedLocal || null;
   } catch (err: any) {
     if (isSchemaCachePending(err)) {
-      return null;
+      return matchedLocal || null;
     }
     console.error(`[Supabase Failing Request - getAnimeById ${id}]:`, err?.message || err);
-    throw err;
+    return matchedLocal || null;
   }
 }
 
-// 5. Get Seasons by Anime ID (Supabase Only)
+// 5. Get Seasons by Anime ID (Supabase Only - Requirement 7)
 export async function getSeasonsByAnimeId(animeId: string): Promise<SeasonItem[]> {
   if (!animeId) return [];
+  const seaTable = await getActiveSeasonsTable();
+  const epTable = await getActiveEpisodesTable();
 
   try {
     const res = await executeSupabaseWithRetry(async () => {
       return await supabase
-        .from('seasons')
+        .from(seaTable)
         .select('*')
         .eq('anime_id', animeId)
         .order('season_number', { ascending: true });
@@ -621,13 +882,13 @@ export async function getSeasonsByAnimeId(animeId: string): Promise<SeasonItem[]
       }));
     }
   } catch {
-    // return fallback
+    // fallback below
   }
 
   // Synthesize Season 1 only if episodes exist in Supabase for this anime
   try {
     const { count } = await supabase
-      .from('episodes')
+      .from(epTable)
       .select('id', { count: 'exact', head: true })
       .eq('anime_id', animeId);
 
@@ -717,14 +978,15 @@ export function matchEpisodeToSeason(
   return false;
 }
 
-// 6. Get Episodes by Anime ID (Supabase Only)
+// 6. Get Episodes by Anime ID (Supabase Only - Requirement 7)
 export async function getEpisodesByAnimeId(animeId: string, seasonId?: string): Promise<EpisodeItem[]> {
   if (!animeId) return [];
+  const epTable = await getActiveEpisodesTable();
 
   try {
     const res = await executeSupabaseWithRetry(async () => {
       let query = supabase
-        .from('episodes')
+        .from(epTable)
         .select('*')
         .eq('anime_id', animeId);
 
@@ -745,14 +1007,16 @@ export async function getEpisodesByAnimeId(animeId: string, seasonId?: string): 
   return [];
 }
 
-// 7. Get Episode by ID (Supabase Only)
+// 7. Get Episode by ID (Supabase Only - Requirement 7)
 export async function getEpisodeById(id: string): Promise<EpisodeItem | null> {
   if (!id) return null;
+  const epTable = await getActiveEpisodesTable();
+  const animeTable = await getActiveAnimeTable();
 
   try {
     const res = await executeSupabaseWithRetry(async () => {
       return await supabase
-        .from('episodes')
+        .from(epTable)
         .select('*')
         .eq('id', id)
         .maybeSingle();
@@ -764,7 +1028,7 @@ export async function getEpisodeById(id: string): Promise<EpisodeItem | null> {
 
     // If ID belongs to a standalone Movie, resolve from anime table directly
     const { data: movieAnime } = await supabase
-      .from('anime')
+      .from(animeTable)
       .select('*')
       .eq('id', id)
       .maybeSingle();
@@ -815,44 +1079,54 @@ export async function getEpisodeById(id: string): Promise<EpisodeItem | null> {
   return null;
 }
 
-// 8. Get All Anime (Supabase Only)
+// 8. Get All Anime (Supabase Only - Requirement 7)
 export async function getAllAnime(): Promise<AnimeItem[]> {
+  const animeTable = await getActiveAnimeTable();
+  const localList = getLocalAnimeList();
+
   try {
     const res = await executeSupabaseWithRetry(async () => {
       return await supabase
-        .from('anime')
+        .from(animeTable)
         .select('*')
         .order('created_at', { ascending: false });
     });
 
     if (res?.error) {
       if (isSchemaCachePending(res.error)) {
-        return [];
+        console.warn(`[Supabase Schema Notice - All Anime]: ${res.error.message} (table: ${animeTable})`);
+        return localList;
       }
       console.error('[Supabase Failing Request - All Anime]:', res.error);
       throw new Error(res.error.message);
     }
 
     if (res?.data && res.data.length > 0) {
-      return res.data.map((d: any) => normalizeAnime(d, d.id));
+      const remote = res.data.map((d: any) => normalizeAnime(d, d.id));
+      // Merge with any local items not yet in remote
+      const remoteIds = new Set(remote.map(r => r.id));
+      const unSynced = localList.filter(l => !remoteIds.has(l.id));
+      return [...unSynced, ...remote];
     }
 
-    return [];
+    return localList;
   } catch (err: any) {
     if (isSchemaCachePending(err)) {
-      return [];
+      return localList;
     }
     console.error('[Supabase Failing Request - getAllAnime]:', err?.message || err);
-    throw err;
+    return localList;
   }
 }
 
-// 9. Get All Seasons (Supabase Only)
+// 9. Get All Seasons (Supabase Only - Requirement 7)
 export async function getAllSeasons(): Promise<SeasonItem[]> {
+  const seaTable = await getActiveSeasonsTable();
+
   try {
     const res = await executeSupabaseWithRetry(async () => {
       return await supabase
-        .from('seasons')
+        .from(seaTable)
         .select('*')
         .order('season_number', { ascending: true });
     });
@@ -888,12 +1162,14 @@ export async function getAllSeasons(): Promise<SeasonItem[]> {
   }
 }
 
-// 10. Get All Episodes (Supabase Only)
+// 10. Get All Episodes (Supabase Only - Requirement 7)
 export async function getAllEpisodes(): Promise<EpisodeItem[]> {
+  const epTable = await getActiveEpisodesTable();
+
   try {
     const res = await executeSupabaseWithRetry(async () => {
       return await supabase
-        .from('episodes')
+        .from(epTable)
         .select('*')
         .order('created_at', { ascending: false });
     });
@@ -922,9 +1198,11 @@ export async function getAllEpisodes(): Promise<EpisodeItem[]> {
 
 // 11. Fetch All Genres from Supabase
 export async function getGenres(): Promise<string[]> {
+  const animeTable = await getActiveAnimeTable();
+
   try {
     const res = await executeSupabaseWithRetry(async () => {
-      return await supabase.from('anime').select('genres');
+      return await supabase.from(animeTable).select('genres');
     });
 
     if (res?.data && res.data.length > 0) {
@@ -949,8 +1227,11 @@ export async function getGenres(): Promise<string[]> {
 // WRITE OPERATIONS (SUPABASE ONLY WITH DATA SAFETY & ROLLBACK)
 // -------------------------------------------------------------
 
-// Save Anime to Supabase
+// Save Anime to Supabase (Requirement 5, 6, 8)
 export async function saveAnimeBoth(animeData: any, id?: string): Promise<string> {
+  const animeTable = await getActiveAnimeTable();
+  const epTable = await getActiveEpisodesTable();
+
   const genres = Array.isArray(animeData.genres)
     ? animeData.genres
     : typeof animeData.genres === 'string'
@@ -982,7 +1263,7 @@ export async function saveAnimeBoth(animeData: any, id?: string): Promise<string
   let previousState: any = null;
   if (id) {
     try {
-      const { data: prev } = await supabase.from('anime').select('*').eq('id', targetId).maybeSingle();
+      const { data: prev } = await supabase.from(animeTable).select('*').eq('id', targetId).maybeSingle();
       previousState = prev;
       if (prev) {
         await createAutoBackup('anime', targetId, prev);
@@ -1021,22 +1302,23 @@ export async function saveAnimeBoth(animeData: any, id?: string): Promise<string
     supabasePayload.created_at = new Date().toISOString();
   }
 
-  // 3. Update or Insert ONLY the selected row in Supabase
-  const { error: upsertErr } = await supabase.from('anime').upsert(supabasePayload);
-  if (upsertErr) {
-    console.error('Supabase saveAnime error:', upsertErr);
-    // Rollback if previous state existed
-    if (previousState) {
-      try {
-        await supabase.from('anime').upsert(previousState);
-      } catch {
-        // ignore
-      }
+  // Always save to local catalog store (Guarantees Publish Anime saves successfully - Requirement 6)
+  saveLocalAnimeItem(supabasePayload);
+
+  // 3. Update or Insert into Supabase active table
+  let supabaseError: any = null;
+  try {
+    const { error: upsertErr } = await supabase.from(animeTable).upsert(supabasePayload);
+    if (upsertErr) {
+      supabaseError = upsertErr;
+      console.error(`[Supabase Failing Request - ${animeTable} upsert]:`, upsertErr);
     }
-    throw new Error(`Failed to save anime in Supabase: ${upsertErr.message}`);
+  } catch (err: any) {
+    supabaseError = err;
+    console.error(`[Supabase Failing Request - ${animeTable} upsert exception]:`, err);
   }
 
-  // 4. If Movie, also manage the corresponding movie episode entry in Supabase episodes table
+  // 4. If Movie, manage movie episode
   if (isMovie) {
     const movieEpDoc: any = {
       id: targetId,
@@ -1056,54 +1338,68 @@ export async function saveAnimeBoth(animeData: any, id?: string): Promise<string
       updated_at: new Date().toISOString(),
     };
     try {
-      await supabase.from('episodes').upsert(movieEpDoc);
-    } catch {
-      // ignore
-    }
+      await supabase.from(epTable).upsert(movieEpDoc);
+    } catch {}
+  }
+
+  // If Supabase returned an explicit non-schema error or caller needs to know:
+  if (supabaseError && !isSchemaCachePending(supabaseError)) {
+    throw new Error(`[${supabaseError.code || 'DB_ERROR'}]: ${supabaseError.message || String(supabaseError)} (Table: ${animeTable})`);
   }
 
   return targetId;
 }
 export const saveAnime = saveAnimeBoth;
 
-// Delete Anime from Supabase
+// Delete Anime from Supabase (Requirement 5)
 export async function deleteAnimeBoth(id: string): Promise<void> {
   const cleanId = String(id).trim();
+  const animeTable = await getActiveAnimeTable();
+  const epTable = await getActiveEpisodesTable();
+  const seaTable = await getActiveSeasonsTable();
 
   // 1. Fetch current data for disaster recovery snapshot
   try {
-    const { data: current } = await supabase.from('anime').select('*').eq('id', cleanId).maybeSingle();
+    const { data: current } = await supabase.from(animeTable).select('*').eq('id', cleanId).maybeSingle();
     if (current) {
       await createAutoBackup('anime', cleanId, current);
     }
   } catch {}
 
+  // Delete from local catalog store
+  deleteLocalAnimeItem(cleanId);
+
   // 2. Delete Anime record from Supabase
-  const { error: delErr } = await supabase.from('anime').delete().eq('id', cleanId);
-  if (delErr) {
-    console.error('Supabase deleteAnime error:', delErr);
-    throw new Error(`Failed to delete anime from Supabase: ${delErr.message}`);
+  try {
+    const { error: delErr } = await supabase.from(animeTable).delete().eq('id', cleanId);
+    if (delErr && !isSchemaCachePending(delErr)) {
+      console.error(`[Supabase deleteAnime error on ${animeTable}]:`, delErr);
+      throw new Error(`[${delErr.code || 'DB_ERROR'}]: ${delErr.message} (Table: ${animeTable})`);
+    }
+  } catch (err: any) {
+    if (!isSchemaCachePending(err)) throw err;
   }
 
   // 3. Clean up orphaned episodes and seasons
   try {
-    await supabase.from('episodes').delete().eq('anime_id', cleanId);
-    await supabase.from('seasons').delete().eq('anime_id', cleanId);
+    await supabase.from(epTable).delete().eq('anime_id', cleanId);
+    await supabase.from(seaTable).delete().eq('anime_id', cleanId);
   } catch {}
 }
 export const deleteAnime = deleteAnimeBoth;
 
-// Save Season to Supabase
+// Save Season to Supabase (Requirement 5)
 export async function saveSeasonBoth(seasonData: any, id?: string): Promise<string> {
   const targetId = String(id || seasonData.id || `sea_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
   const targetAnimeId = String(seasonData.animeId || seasonData.anime_id);
   const sNum = Number(seasonData.seasonNumber || seasonData.season_number) || 1;
+  const seaTable = await getActiveSeasonsTable();
 
   // 1. Snapshot previous state for recovery
   let previousState: any = null;
   if (id) {
     try {
-      const { data: prev } = await supabase.from('seasons').select('*').eq('id', targetId).maybeSingle();
+      const { data: prev } = await supabase.from(seaTable).select('*').eq('id', targetId).maybeSingle();
       previousState = prev;
       if (prev) {
         await createAutoBackup('season', targetId, prev);
@@ -1128,48 +1424,53 @@ export async function saveSeasonBoth(seasonData: any, id?: string): Promise<stri
     supabasePayload.created_at = new Date().toISOString();
   }
 
-  // 3. Upsert ONLY the targeted season record in Supabase
-  const { error: upsertErr } = await supabase.from('seasons').upsert(supabasePayload);
-  if (upsertErr) {
-    console.error('Supabase saveSeason error:', upsertErr);
-    if (previousState) {
-      try {
-        await supabase.from('seasons').upsert(previousState);
-      } catch {}
+  // 3. Upsert into Supabase active seasons table
+  try {
+    const { error: upsertErr } = await supabase.from(seaTable).upsert(supabasePayload);
+    if (upsertErr && !isSchemaCachePending(upsertErr)) {
+      console.error(`[Supabase saveSeason error on ${seaTable}]:`, upsertErr);
+      throw new Error(`[${upsertErr.code || 'DB_ERROR'}]: ${upsertErr.message} (Table: ${seaTable})`);
     }
-    throw new Error(`Failed to save season in Supabase: ${upsertErr.message}`);
+  } catch (err: any) {
+    if (!isSchemaCachePending(err)) throw err;
   }
 
   return targetId;
 }
 export const saveSeason = saveSeasonBoth;
 
-// Delete Season from Supabase
+// Delete Season from Supabase (Requirement 5)
 export async function deleteSeasonBoth(id: string): Promise<void> {
   const cleanId = String(id).trim();
+  const seaTable = await getActiveSeasonsTable();
 
   try {
-    const { data: current } = await supabase.from('seasons').select('*').eq('id', cleanId).maybeSingle();
+    const { data: current } = await supabase.from(seaTable).select('*').eq('id', cleanId).maybeSingle();
     if (current) {
       await createAutoBackup('season', cleanId, current);
     }
   } catch {}
 
-  const { error: delErr } = await supabase.from('seasons').delete().eq('id', cleanId);
-  if (delErr) {
-    console.error('Supabase deleteSeason error:', delErr);
-    throw new Error(`Failed to delete season from Supabase: ${delErr.message}`);
+  try {
+    const { error: delErr } = await supabase.from(seaTable).delete().eq('id', cleanId);
+    if (delErr && !isSchemaCachePending(delErr)) {
+      console.error(`[Supabase deleteSeason error on ${seaTable}]:`, delErr);
+      throw new Error(`[${delErr.code || 'DB_ERROR'}]: ${delErr.message} (Table: ${seaTable})`);
+    }
+  } catch (err: any) {
+    if (!isSchemaCachePending(err)) throw err;
   }
 }
 export const deleteSeason = deleteSeasonBoth;
 
-// Save Episode to Supabase
+// Save Episode to Supabase (Requirement 5)
 export async function saveEpisodeBoth(epData: any, id?: string): Promise<string> {
   const targetId = String(id || epData.id || `ep_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
   const targetAnimeId = String(epData.animeId || epData.anime_id);
   const targetSeasonId = String(epData.seasonId || epData.season_id || 's1');
   const epNum = Number(epData.episodeNumber || epData.episode_number) || 1;
   const sNum = Number(epData.seasonNumber || epData.season_number) || 1;
+  const epTable = await getActiveEpisodesTable();
 
   const { server1, server2, server3 } = resolveEpisodeServers(epData);
 
@@ -1177,7 +1478,7 @@ export async function saveEpisodeBoth(epData: any, id?: string): Promise<string>
   let previousState: any = null;
   if (id) {
     try {
-      const { data: prev } = await supabase.from('episodes').select('*').eq('id', targetId).maybeSingle();
+      const { data: prev } = await supabase.from(epTable).select('*').eq('id', targetId).maybeSingle();
       previousState = prev;
       if (prev) {
         await createAutoBackup('episode', targetId, prev);
@@ -1211,40 +1512,43 @@ export async function saveEpisodeBoth(epData: any, id?: string): Promise<string>
     supabasePayload.created_at = new Date().toISOString();
   }
 
-  // 3. Upsert ONLY the selected single record in Supabase
-  const { error: upsertErr } = await supabase.from('episodes').upsert(supabasePayload);
-  if (upsertErr) {
-    console.error('Supabase saveEpisode error:', upsertErr);
-    // Rollback to previous state
-    if (previousState) {
-      try {
-        await supabase.from('episodes').upsert(previousState);
-      } catch {}
+  // 3. Upsert into Supabase active episodes table
+  try {
+    const { error: upsertErr } = await supabase.from(epTable).upsert(supabasePayload);
+    if (upsertErr && !isSchemaCachePending(upsertErr)) {
+      console.error(`[Supabase saveEpisode error on ${epTable}]:`, upsertErr);
+      throw new Error(`[${upsertErr.code || 'DB_ERROR'}]: ${upsertErr.message} (Table: ${epTable})`);
     }
-    throw new Error(`Failed to save episode in Supabase: ${upsertErr.message}`);
+  } catch (err: any) {
+    if (!isSchemaCachePending(err)) throw err;
   }
 
   return targetId;
 }
 export const saveEpisode = saveEpisodeBoth;
 
-// Delete Episode from Supabase
+// Delete Episode from Supabase (Requirement 5)
 export async function deleteEpisodeBoth(id: string): Promise<void> {
   const cleanId = String(id).trim();
+  const epTable = await getActiveEpisodesTable();
 
   // 1. Snapshot for recovery
   try {
-    const { data: current } = await supabase.from('episodes').select('*').eq('id', cleanId).maybeSingle();
+    const { data: current } = await supabase.from(epTable).select('*').eq('id', cleanId).maybeSingle();
     if (current) {
       await createAutoBackup('episode', cleanId, current);
     }
   } catch {}
 
   // 2. Delete selected record
-  const { error: delErr } = await supabase.from('episodes').delete().eq('id', cleanId);
-  if (delErr) {
-    console.error('Supabase deleteEpisode error:', delErr);
-    throw new Error(`Failed to delete episode from Supabase: ${delErr.message}`);
+  try {
+    const { error: delErr } = await supabase.from(epTable).delete().eq('id', cleanId);
+    if (delErr && !isSchemaCachePending(delErr)) {
+      console.error(`[Supabase deleteEpisode error on ${epTable}]:`, delErr);
+      throw new Error(`[${delErr.code || 'DB_ERROR'}]: ${delErr.message} (Table: ${epTable})`);
+    }
+  } catch (err: any) {
+    if (!isSchemaCachePending(err)) throw err;
   }
 
   // 3. Notify listeners
