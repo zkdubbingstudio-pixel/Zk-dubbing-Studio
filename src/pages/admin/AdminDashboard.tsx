@@ -8,6 +8,7 @@ import {
 import { Link } from 'react-router-dom';
 import { getAllAnime, getAllSeasons, getAllEpisodes } from '../../lib/dataService';
 import { supabase } from '../../lib/supabase';
+import SmartImage from '../../components/SmartImage';
 
 export default function AdminDashboard() {
   const [animeList, setAnimeList] = useState<any[]>([]);
@@ -261,11 +262,15 @@ export default function AdminDashboard() {
                       }`}>
                         {idx + 1}
                       </span>
-                      <img 
-                        src={anime.posterUrl || anime.poster_url || ""} 
-                        alt={anime.title} 
-                        className="w-12 h-14 rounded-xl object-cover flex-shrink-0 border border-white/10 group-hover:scale-105 transition-transform"
-                      />
+                      <div className="w-12 h-14 rounded-xl overflow-hidden flex-shrink-0 border border-white/10 group-hover:scale-105 transition-transform">
+                        <SmartImage 
+                          src={anime.poster_url || anime.posterUrl || anime.banner_url || anime.bannerUrl || ""} 
+                          alt={anime.title} 
+                          type="poster"
+                          className="w-full h-full"
+                          style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                        />
+                      </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <p className="text-xs font-bold text-white truncate group-hover:text-brand transition-colors">{anime.title}</p>
@@ -409,11 +414,15 @@ export default function AdminDashboard() {
                   className="flex items-center justify-between gap-3 p-2.5 bg-white/5 border border-white/5 rounded-2xl hover:border-brand/30 transition-colors"
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <img 
-                      src={anime.posterUrl || anime.poster_url || ""} 
-                      alt={anime.title} 
-                      className="w-10 h-10 rounded-xl object-cover flex-shrink-0 border border-white/10"
-                    />
+                    <div className="w-10 h-10 rounded-xl overflow-hidden flex-shrink-0 border border-white/10">
+                      <SmartImage 
+                        src={anime.poster_url || anime.posterUrl || anime.banner_url || anime.bannerUrl || ""} 
+                        alt={anime.title} 
+                        type="poster"
+                        className="w-full h-full"
+                        style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                      />
+                    </div>
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-white truncate">{anime.title}</p>
                       <p className="text-[10px] text-white/40">{anime.status || 'Ongoing'} • {anime.releaseYear || anime.release_year || '2024'}</p>
@@ -458,8 +467,14 @@ export default function AdminDashboard() {
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-10 h-10 rounded-xl bg-black/50 overflow-hidden flex-shrink-0 border border-white/10 flex items-center justify-center">
-                      {ep.thumbnailUrl ? (
-                        <img src={ep.thumbnailUrl} alt={ep.title} className="w-full h-full object-cover" />
+                      {ep.thumbnailUrl || ep.thumbnail_url ? (
+                        <SmartImage 
+                          src={ep.thumbnailUrl || ep.thumbnail_url} 
+                          alt={ep.title || `Episode ${ep.episodeNumber}`} 
+                          type="poster"
+                          className="w-full h-full"
+                          style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                        />
                       ) : (
                         <span className="text-[10px] font-bold text-white/40">Ep {ep.episodeNumber}</span>
                       )}

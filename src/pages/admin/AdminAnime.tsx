@@ -13,6 +13,7 @@ import {
 } from '../../lib/dataService';
 import ImageUpload from '../../components/admin/ImageUpload';
 import { logAdminActivity } from '../../lib/activityLogger';
+import SmartImage from '../../components/SmartImage';
 
 const COMMON_GENRES = [
   'Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 
@@ -1212,10 +1213,13 @@ NOTIFY pgrst, 'reload schema';`;
               >
                 {/* Poster & Badges */}
                 <div className="relative h-48 w-full overflow-hidden bg-white/5">
-                  <img
-                    src={poster}
+                  <SmartImage
+                    src={anime.poster_url || anime.posterUrl || anime.banner_url || anime.bannerUrl || ''}
                     alt={anime.title}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    type="poster"
+                    className="w-full h-full group-hover:scale-105 transition-transform duration-300"
+                    style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                    titleFallback={anime.title}
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-[#090b12] via-transparent to-black/60 pointer-events-none"></div>
 
@@ -1347,11 +1351,15 @@ NOTIFY pgrst, 'reload schema';`;
                   <tr key={anime.id} className="hover:bg-white/5 transition-colors">
                     <td className="p-4">
                       <div className="flex items-center gap-3">
-                        <img
-                          src={anime.posterUrl || anime.poster_url || ""}
-                          alt={anime.title}
-                          className="w-10 h-14 rounded-xl object-cover flex-shrink-0 border border-white/10"
-                        />
+                        <div className="w-10 h-14 rounded-xl overflow-hidden flex-shrink-0 border border-white/10">
+                          <SmartImage
+                            src={anime.poster_url || anime.posterUrl || anime.banner_url || anime.bannerUrl || ""}
+                            alt={anime.title}
+                            type="poster"
+                            className="w-full h-full"
+                            style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                          />
+                        </div>
                         <div>
                           <p className="font-bold text-white text-sm">{anime.title}</p>
                           <p className="text-[11px] text-white/40">

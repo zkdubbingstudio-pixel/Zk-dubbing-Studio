@@ -20,6 +20,7 @@ import {
   getUserProgress, 
   deleteUserProgress 
 } from '../lib/dataService';
+import SmartImage from '../components/SmartImage';
 
 export default function Profile() {
   const { user, firebaseUser, loading } = useAuthStore();
@@ -344,19 +345,15 @@ export default function Profile() {
                     className="group glass-cyber-card rounded-2xl p-3 border border-white/10 hover:border-[#00e5ff]/50 transition-all duration-300 relative overflow-hidden flex flex-col justify-between shadow-[0_4px_20px_rgba(0,0,0,0.5)]"
                   >
                     <Link to={watchUrl} className="block relative aspect-video rounded-xl overflow-hidden bg-[#0a0e17] mb-3">
-                      {item.poster_url ? (
-                        <img
-                          src={item.poster_url}
-                          alt={item.anime_title || 'Episode'}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-tr from-[#05070b] to-[#101726] text-silver-dark font-bold text-xs p-3 text-center">
-                          <Play className="w-6 h-6 text-[#00e5ff] mb-1 opacity-70" />
-                          <span className="line-clamp-2 text-white/80">{item.anime_title || 'Continue Stream'}</span>
-                        </div>
-                      )}
+                      <SmartImage
+                        src={item.poster_url || item.posterUrl || ''}
+                        alt={item.anime_title || 'Episode'}
+                        type="poster"
+                        loading="lazy"
+                        className="w-full h-full group-hover:scale-105 transition-transform duration-500"
+                        style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                        titleFallback={item.anime_title || 'Continue Stream'}
+                      />
 
                       {/* Play Overlay */}
                       <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">

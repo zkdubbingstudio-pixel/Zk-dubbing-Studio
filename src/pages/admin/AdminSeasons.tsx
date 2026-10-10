@@ -7,6 +7,7 @@ import {
 import { getAllAnime, getAllSeasons, saveSeasonBoth, deleteSeasonBoth, formatDbError } from '../../lib/dataService';
 import ImageUpload from '../../components/admin/ImageUpload';
 import { logAdminActivity } from '../../lib/activityLogger';
+import SmartImage from '../../components/SmartImage';
 
 const SEASON_STATUSES = ['Active', 'Ongoing', 'Completed', 'Archived'];
 
@@ -454,8 +455,14 @@ export default function AdminSeasons() {
                     <td className="p-4">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-14 bg-black/60 rounded-xl overflow-hidden flex-shrink-0 border border-white/10 flex items-center justify-center">
-                          {s.posterUrl || s.poster_url ? (
-                            <img src={s.posterUrl || s.poster_url} alt={s.title} className="w-full h-full object-cover" />
+                          {s.posterUrl || s.poster_url || s.bannerUrl || s.banner_url ? (
+                            <SmartImage 
+                              src={s.posterUrl || s.poster_url || s.bannerUrl || s.banner_url} 
+                              alt={s.title} 
+                              type="poster"
+                              className="w-full h-full object-cover" 
+                              style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                            />
                           ) : (
                             <span className="text-[10px] font-bold text-brand">S{s.seasonNumber}</span>
                           )}

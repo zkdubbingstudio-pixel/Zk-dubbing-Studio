@@ -6,6 +6,7 @@ import {
   TrendingUp, Users, Eye, PlaySquare, Smartphone, Monitor, Tablet, Tv, Calendar, ArrowUpRight, Flame, Film 
 } from 'lucide-react';
 import { getAllAnime, getAllEpisodes } from '../../lib/dataService';
+import SmartImage from '../../components/SmartImage';
 
 export default function AdminAnalytics() {
   const [timeRange, setTimeRange] = useState<'7d' | '30d' | '90d'>('7d');
@@ -286,11 +287,15 @@ export default function AdminAnalytics() {
                       }`}>
                         {index + 1}
                       </span>
-                      <img 
-                        src={anime.posterUrl || anime.poster_url || ""} 
-                        alt={anime.title} 
-                        className="w-10 h-10 rounded-xl object-cover flex-shrink-0 border border-white/10"
-                      />
+                      <div className="w-10 h-10 rounded-xl overflow-hidden flex-shrink-0 border border-white/10">
+                        <SmartImage 
+                          src={anime.poster_url || anime.posterUrl || anime.banner_url || anime.bannerUrl || ""} 
+                          alt={anime.title} 
+                          type="poster"
+                          className="w-full h-full"
+                          style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                        />
+                      </div>
                       <div className="min-w-0">
                         <p className="text-xs font-bold text-white truncate">{anime.title}</p>
                         <p className="text-[11px] text-white/40">{anime.status || 'Ongoing'} • {anime.genres?.[0] || 'Anime'}</p>
@@ -327,9 +332,15 @@ export default function AdminAnalytics() {
               const epViews = Number(ep.views) || (sortedEpisodes.length - idx) * 480 + 120;
               return (
                 <div key={ep.id} className="p-3 bg-white/5 border border-white/5 hover:border-purple-400/40 rounded-2xl flex items-center gap-3 transition-colors">
-                  <div className="w-12 h-12 rounded-xl bg-black/50 overflow-hidden flex-shrink-0 border border-white/10">
-                    {ep.thumbnailUrl ? (
-                      <img src={ep.thumbnailUrl} alt={ep.title} className="w-full h-full object-cover" />
+                  <div className="w-12 h-12 rounded-xl bg-black/50 overflow-hidden flex-shrink-0 border border-white/10 flex items-center justify-center">
+                    {ep.thumbnailUrl || ep.thumbnail_url ? (
+                      <SmartImage 
+                        src={ep.thumbnailUrl || ep.thumbnail_url} 
+                        alt={ep.title || `Episode ${ep.episodeNumber}`} 
+                        type="poster"
+                        className="w-full h-full"
+                        style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                      />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-white/30 text-xs font-bold">
                         Ep {ep.episodeNumber}

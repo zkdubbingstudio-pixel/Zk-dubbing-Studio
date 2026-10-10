@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Play, RotateCcw, Clock, Trash2 } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { getUserProgress, deleteUserProgress } from '../lib/dataService';
+import SmartImage from './SmartImage';
 
 export default function ContinueWatchingRow() {
   const { user, firebaseUser } = useAuthStore();
@@ -86,21 +87,17 @@ export default function ContinueWatchingRow() {
                 to={route}
                 className="block relative rounded-2xl overflow-hidden glass-cyber-card border border-white/10 hover:border-[#00e5ff]/60 transition-all duration-300 transform hover:-translate-y-1 shadow-[0_8px_25px_rgba(0,0,0,0.7)] hover:shadow-[0_15px_35px_rgba(0,229,255,0.25)]"
               >
-                {/* 16:9 Thumbnail view */}
+                {/* 16:9 Thumbnail view (Requirements 2, 6, 9) */}
                 <div className="relative aspect-video w-full overflow-hidden bg-[#0a0e17]">
-                  {item.poster_url ? (
-                    <img
-                      src={item.poster_url}
-                      alt={item.anime_title || 'Episode'}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90 group-hover:opacity-100"
-                      loading="lazy"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-tr from-[#05070b] to-[#101726] p-4 text-center">
-                      <Play className="w-8 h-8 text-[#00e5ff] opacity-75 mb-1" />
-                      <span className="text-xs font-bold text-silver-light line-clamp-1">{item.anime_title}</span>
-                    </div>
-                  )}
+                  <SmartImage
+                    src={item.poster_url || item.posterUrl || item.thumbnail_url || item.thumbnailUrl || ''}
+                    alt={item.anime_title || 'Episode'}
+                    type="poster"
+                    loading="lazy"
+                    className="w-full h-full group-hover:scale-105 transition-transform duration-500 opacity-90 group-hover:opacity-100"
+                    style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                    titleFallback={item.anime_title || 'Episode'}
+                  />
 
                   {/* Dark vignette */}
                   <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-[#05070b]/40 to-transparent" />

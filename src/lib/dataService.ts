@@ -13,8 +13,9 @@
 
 import { supabase, executeSupabaseWithRetry, formatDbError, verifyRlsPolicies } from './supabase';
 import { getCachedData, setCachedData, clearCachedData, clearCachePrefix } from './cache';
+import { resolveImageUrl } from './imageUtils';
 
-export { formatDbError, verifyRlsPolicies };
+export { formatDbError, verifyRlsPolicies, resolveImageUrl };
 
 export interface AnimeItem {
   id: string;
@@ -91,6 +92,10 @@ export interface EpisodeItem {
   title?: string;
   episode_title?: string;
   description?: string;
+  posterUrl?: string;
+  poster_url?: string;
+  bannerUrl?: string;
+  banner_url?: string;
   thumbnailUrl?: string;
   thumbnail_url?: string;
   duration?: string;
@@ -257,16 +262,21 @@ export function normalizeAnime(item: any, id?: string): AnimeItem {
     item.isMovie
   );
 
+  const rawPoster = item.poster_url || item.posterUrl || '';
+  const rawBanner = item.banner_url || item.bannerUrl || '';
+  const poster = resolveImageUrl(rawPoster || rawBanner, 'posters');
+  const banner = resolveImageUrl(rawBanner || rawPoster, 'banners');
+
   return {
     ...item,
     id: String(id || item.id),
     title: item.title || 'Untitled Anime',
     description: item.description || item.synopsis || '',
     synopsis: item.synopsis || item.description || '',
-    posterUrl: item.posterUrl || item.poster_url || '',
-    poster_url: item.poster_url || item.posterUrl || '',
-    bannerUrl: item.bannerUrl || item.banner_url || item.posterUrl || item.poster_url || '',
-    banner_url: item.banner_url || item.bannerUrl || item.poster_url || item.posterUrl || '',
+    posterUrl: poster,
+    poster_url: poster,
+    bannerUrl: banner,
+    banner_url: banner,
     releaseYear: item.releaseYear || item.release_year || '',
     release_year: item.release_year || item.releaseYear || '',
     genres,
@@ -314,8 +324,13 @@ export function normalizeEpisodeDoc(
   const fallbackAnimeId = typeof animeIdFallbackOrJoinedAnime === 'string' ? animeIdFallbackOrJoinedAnime : '';
 
   const animeTitle = animeObj?.title || data.anime_title || data.animeTitle || '';
-  const animePoster = animeObj?.poster_url || animeObj?.posterUrl || '';
-  const animeBanner = animeObj?.banner_url || animeObj?.bannerUrl || '';
+  const rawAnimePoster = animeObj?.poster_url || animeObj?.posterUrl || data.poster_url || data.posterUrl || '';
+  const rawAnimeBanner = animeObj?.banner_url || animeObj?.bannerUrl || data.banner_url || data.bannerUrl || '';
+  const rawEpThumb = data.thumbnail_url || data.thumbnailUrl || '';
+
+  const animePoster = resolveImageUrl(rawAnimePoster || rawEpThumb || rawAnimeBanner, 'posters');
+  const animeBanner = resolveImageUrl(rawAnimeBanner || rawAnimePoster || rawEpThumb, 'banners');
+  const epThumbnail = resolveImageUrl(rawEpThumb || rawAnimePoster || rawAnimeBanner, 'thumbnails');
   const animeGenres = Array.isArray(animeObj?.genres) ? animeObj.genres : [];
   const seasonTitle = seasonObj?.title || (epSeasonNum ? `Season ${epSeasonNum}` : 'Season 1');
 
@@ -333,8 +348,12 @@ export function normalizeEpisodeDoc(
     title: data.title || data.episode_title || (isMovie ? 'Full Movie' : `Episode ${epNum}`),
     episode_title: data.episode_title || data.title || (isMovie ? 'Full Movie' : `Episode ${epNum}`),
     description: data.description || '',
-    thumbnailUrl: data.thumbnailUrl || data.thumbnail_url || animeBanner || animePoster || '',
-    thumbnail_url: data.thumbnail_url || data.thumbnailUrl || animeBanner || animePoster || '',
+    posterUrl: animePoster,
+    poster_url: animePoster,
+    bannerUrl: animeBanner,
+    banner_url: animeBanner,
+    thumbnailUrl: epThumbnail || animePoster,
+    thumbnail_url: epThumbnail || animePoster,
     duration: data.duration || (isMovie ? '1h 45m' : '24m'),
     releaseDate: data.releaseDate || data.release_date || '',
     server1Url: server1,
@@ -643,12 +662,12 @@ export async function getNewDrops(): Promise<any[]> {
             title: animeObj?.title || ep.episode_title || 'Anime Series',
             animeTitle: animeObj?.title || ep.episode_title || 'Anime Series',
             episodeTitle: ep.episode_title || ep.title || (ep.episode_number ? `Episode ${ep.episode_number}` : 'Episode 1'),
-            posterUrl: animeObj?.poster_url || ep.thumbnail_url || '',
-            poster_url: animeObj?.poster_url || ep.thumbnail_url || '',
-            thumbnailUrl: ep.thumbnail_url || animeObj?.banner_url || animeObj?.poster_url || '',
-            thumbnail_url: ep.thumbnail_url || animeObj?.banner_url || animeObj?.poster_url || '',
-            bannerUrl: animeObj?.banner_url || '',
-            banner_url: animeObj?.banner_url || '',
+            posterUrl: resolveImageUrl(animeObj?.poster_url || animeObj?.posterUrl || ep.thumbnail_url || ep.thumbnailUrl, 'posters'),
+            poster_url: resolveImageUrl(animeObj?.poster_url || animeObj?.posterUrl || ep.thumbnail_url || ep.thumbnailUrl, 'posters'),
+            thumbnailUrl: resolveImageUrl(ep.thumbnail_url || ep.thumbnailUrl || animeObj?.poster_url || animeObj?.banner_url, 'thumbnails'),
+            thumbnail_url: resolveImageUrl(ep.thumbnail_url || ep.thumbnailUrl || animeObj?.poster_url || animeObj?.banner_url, 'thumbnails'),
+            bannerUrl: resolveImageUrl(animeObj?.banner_url || animeObj?.bannerUrl || animeObj?.poster_url, 'banners'),
+            banner_url: resolveImageUrl(animeObj?.banner_url || animeObj?.bannerUrl || animeObj?.poster_url, 'banners'),
             genres: Array.isArray(animeObj?.genres) ? animeObj.genres : [],
             animeGenres: Array.isArray(animeObj?.genres) ? animeObj.genres : [],
             contentType: animeObj?.content_type || animeObj?.type || 'TV Series',
@@ -1107,8 +1126,10 @@ export async function getAllSeasons(): Promise<SeasonItem[]> {
         animeId: String(item.anime_id || item.animeId),
         seasonNumber: Number(item.season_number || item.seasonNumber || 1),
         title: item.title || `Season ${item.season_number || item.seasonNumber || 1}`,
-        bannerUrl: item.banner_url || item.bannerUrl,
-        posterUrl: item.poster_url || item.posterUrl,
+        bannerUrl: resolveImageUrl(item.banner_url || item.bannerUrl, 'banners'),
+        banner_url: resolveImageUrl(item.banner_url || item.bannerUrl, 'banners'),
+        posterUrl: resolveImageUrl(item.poster_url || item.posterUrl, 'posters'),
+        poster_url: resolveImageUrl(item.poster_url || item.posterUrl, 'posters'),
         order: Number(item.order ?? (item.season_number || 1)),
       }));
       setCachedData(cacheKey, mapped);

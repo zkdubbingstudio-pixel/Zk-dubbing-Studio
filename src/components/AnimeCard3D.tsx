@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Play, Sparkles, Star } from 'lucide-react';
+import SmartImage from './SmartImage';
 
 interface AnimeCard3DProps {
   key?: React.Key;
@@ -55,22 +56,17 @@ export default function AnimeCard3D({
     setIsHovered(false);
   };
 
+  // Requirement 2: Use anime.poster_url for New Drops, Trending, Popular Today, Browse, Search, Episode cards
+  // Requirement 3: Never use placeholder or empty image when a valid URL exists
   const posterImg =
-    aspectRatio === 'video'
-      ? (anime.thumbnailUrl ||
-         anime.thumbnail_url ||
-         anime.bannerUrl ||
-         anime.banner_url ||
-         anime.posterUrl ||
-         anime.poster_url ||
-         '')
-      : (anime.posterUrl ||
-         anime.poster_url ||
-         anime.thumbnailUrl ||
-         anime.thumbnail_url ||
-         anime.bannerUrl ||
-         anime.banner_url ||
-         '');
+    anime.poster_url ||
+    anime.posterUrl ||
+    (aspectRatio === 'video' ? (anime.thumbnail_url || anime.thumbnailUrl) : '') ||
+    anime.banner_url ||
+    anime.bannerUrl ||
+    anime.thumbnail_url ||
+    anime.thumbnailUrl ||
+    '';
 
   const title = anime.animeTitle || anime.title || anime.episodeTitle || 'Untitled Anime';
   const isMovie = Boolean(anime.type === 'Movie' || anime.contentType === 'Movie' || anime.isMovie);
@@ -114,30 +110,24 @@ export default function AnimeCard3D({
             className={`absolute -inset-1 rounded-2xl bg-gradient-to-r from-[#00e5ff] via-[#cbd5e1] to-[#00b4d8] opacity-0 group-hover:opacity-40 blur-sm transition-opacity duration-500 pointer-events-none`}
           />
 
-          {/* Aspect Ratio Poster Wrapper */}
+          {/* Aspect Ratio Poster Wrapper (Requirements 2, 6, 9) */}
           <div
             className={`relative w-full ${
               aspectRatio === 'video' ? 'aspect-[16/9]' : 'aspect-[2/3]'
             } overflow-hidden bg-[#0a0e17] shrink-0`}
           >
-            {posterImg ? (
-              <img
-                src={posterImg}
-                alt={title}
-                loading="lazy"
-                className="w-full h-full object-cover object-center transition-transform duration-700 ease-out group-hover:scale-105 opacity-95 group-hover:opacity-100"
-              />
-            ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center bg-gradient-to-tr from-[#05070b] via-[#0a0e17] to-[#121c2d]">
-                <div className="w-8 h-8 rounded-lg bg-[#00e5ff]/10 border border-[#00e5ff]/30 flex items-center justify-center mb-2">
-                  <Play className="w-4 h-4 text-[#00e5ff]" />
-                </div>
-                <span className="text-xs font-bold text-silver-light line-clamp-2">{title}</span>
-              </div>
-            )}
+            <SmartImage
+              src={posterImg}
+              alt={title}
+              type="poster"
+              loading="lazy"
+              titleFallback={title}
+              className="w-full h-full transition-transform duration-700 ease-out group-hover:scale-105 opacity-95 group-hover:opacity-100"
+              style={{ objectFit: 'cover', objectPosition: 'center center' }}
+            />
 
             {/* Cinematic Gradient Overlays */}
-            <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-[#05070b]/30 to-transparent opacity-80 group-hover:opacity-60 transition-opacity duration-300" />
+            <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-[#05070b]/30 to-transparent opacity-80 group-hover:opacity-60 transition-opacity duration-300 pointer-events-none" />
             <div className="absolute inset-0 bg-gradient-to-tr from-[#00e5ff]/10 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
 
             {/* Dynamic 3D Glare Light Reflection */}

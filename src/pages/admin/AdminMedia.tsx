@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 import { getAllAnime, getAllEpisodes, getAllSeasons } from '../../lib/dataService';
 import { logAdminActivity } from '../../lib/activityLogger';
+import { resolveImageUrl } from '../../lib/imageUtils';
+import SmartImage from '../../components/SmartImage';
 
 interface MediaItem {
   id: string;
@@ -36,20 +38,22 @@ export default function AdminMedia() {
       const items: MediaItem[] = [];
 
       animes.forEach((anime: any) => {
-        if (anime.posterUrl || anime.poster_url) {
+        const poster = anime.posterUrl || anime.poster_url;
+        if (poster) {
           items.push({
             id: `anime-poster-${anime.id}`,
-            url: anime.posterUrl || anime.poster_url,
+            url: resolveImageUrl(poster, 'posters'),
             type: 'poster',
             title: `${anime.title} (Poster)`,
             parentTitle: anime.title,
             parentId: anime.id,
           });
         }
-        if (anime.bannerUrl || anime.banner_url) {
+        const banner = anime.bannerUrl || anime.banner_url;
+        if (banner) {
           items.push({
             id: `anime-banner-${anime.id}`,
-            url: anime.bannerUrl || anime.banner_url,
+            url: resolveImageUrl(banner, 'banners'),
             type: 'banner',
             title: `${anime.title} (Banner)`,
             parentTitle: anime.title,
@@ -59,10 +63,11 @@ export default function AdminMedia() {
       });
 
       seasons.forEach((season: any) => {
-        if (season.bannerUrl || season.banner_url) {
+        const banner = season.bannerUrl || season.banner_url;
+        if (banner) {
           items.push({
             id: `season-banner-${season.id}`,
-            url: season.bannerUrl || season.banner_url,
+            url: resolveImageUrl(banner, 'banners'),
             type: 'banner',
             title: `${season.title || 'Season'} (Banner)`,
             parentTitle: `Season ${season.seasonNumber || 1}`,
@@ -72,10 +77,11 @@ export default function AdminMedia() {
       });
 
       episodes.forEach((ep: any) => {
-        if (ep.thumbnailUrl || ep.thumbnail_url) {
+        const thumb = ep.thumbnailUrl || ep.thumbnail_url;
+        if (thumb) {
           items.push({
             id: `ep-thumb-${ep.id}`,
-            url: ep.thumbnailUrl || ep.thumbnail_url,
+            url: resolveImageUrl(thumb, 'thumbnails'),
             type: 'thumbnail',
             title: ep.title ? `Ep ${ep.episodeNumber}: ${ep.title}` : `Episode ${ep.episodeNumber}`,
             parentTitle: `Episode ${ep.episodeNumber}`,
@@ -270,11 +276,14 @@ export default function AdminMedia() {
                   onClick={() => setSelectedImage(item)}
                   className="relative aspect-video sm:aspect-[4/3] bg-black/60 overflow-hidden cursor-pointer"
                 >
-                  <img 
+                  <SmartImage 
                     src={item.url} 
                     alt={item.title}
-                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    type={item.type}
+                    className="w-full h-full transition-transform duration-500 group-hover:scale-105"
+                    style={{ objectFit: 'cover', objectPosition: 'center center' }}
                     loading="lazy"
+                    titleFallback={item.title}
                   />
                   <div className="absolute top-2 left-2 z-10">
                     <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md backdrop-blur-md border ${

@@ -12,6 +12,7 @@ import {
 } from '../../lib/dataService';
 import ImageUpload from '../../components/admin/ImageUpload';
 import { logAdminActivity } from '../../lib/activityLogger';
+import SmartImage from '../../components/SmartImage';
 
 export default function AdminEpisodes() {
   const [episodes, setEpisodes] = useState<any[]>([]);
@@ -894,8 +895,14 @@ export default function AdminEpisodes() {
                     <td className="p-4">
                       <div className="flex items-center gap-3">
                         <div className="w-14 h-10 rounded-xl bg-black/60 overflow-hidden flex-shrink-0 border border-white/10 flex items-center justify-center relative group">
-                          {ep.thumbnailUrl || ep.thumbnail_url ? (
-                            <img src={ep.thumbnailUrl || ep.thumbnail_url} alt={ep.title} className="w-full h-full object-cover" />
+                          {ep.thumbnailUrl || ep.thumbnail_url || anime?.posterUrl || anime?.poster_url ? (
+                            <SmartImage 
+                              src={ep.thumbnailUrl || ep.thumbnail_url || anime?.posterUrl || anime?.poster_url} 
+                              alt={ep.title || `Episode ${ep.episodeNumber}`} 
+                              type="poster"
+                              className="w-full h-full object-cover" 
+                              style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                            />
                           ) : (
                             <span className="text-[10px] font-bold text-white/40">Ep {ep.episodeNumber}</span>
                           )}

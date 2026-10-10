@@ -2,6 +2,7 @@ import { useParams, Link, useLocation, useNavigate } from 'react-router-dom';
 import { Play, Send, ChevronDown, Sparkles, Star, Film, Calendar, Clock, Mic, Heart, Bookmark } from 'lucide-react';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuthStore } from '../store/authStore';
+import SmartImage from '../components/SmartImage';
 import { 
   getAnimeById, 
   getSeasonsByAnimeId, 
@@ -254,27 +255,29 @@ export default function AnimeDetails() {
   }
 
   const currentSeasonObj = seasons.find((s) => s.id === selectedSeason);
+  // Requirement 1: Use anime.banner_url for Anime Details page background banner
   const bannerImg =
-    currentSeasonObj?.bannerUrl ||
-    currentSeasonObj?.banner_url ||
-    anime.bannerUrl ||
     anime.banner_url ||
-    anime.posterUrl ||
+    anime.bannerUrl ||
+    currentSeasonObj?.banner_url ||
+    currentSeasonObj?.bannerUrl ||
     anime.poster_url ||
+    anime.posterUrl ||
     '';
 
+  // Requirement 2: Use anime.poster_url for Details page poster
   const posterImg =
-    currentSeasonObj?.posterUrl ||
-    currentSeasonObj?.poster_url ||
-    anime.posterUrl ||
     anime.poster_url ||
-    anime.bannerUrl ||
+    anime.posterUrl ||
+    currentSeasonObj?.poster_url ||
+    currentSeasonObj?.posterUrl ||
     anime.banner_url ||
+    anime.bannerUrl ||
     '';
 
   return (
     <div className="pb-24 bg-[#05070b] min-h-screen text-silver-light">
-      {/* 1. Centered Hero Background Banner & Vertically Centered Poster (Requirements 3 & 4) */}
+      {/* 1. Centered Hero Background Banner & Vertically Centered Poster (Requirements 1, 2, 6, 9) */}
       <div className="relative w-full overflow-hidden bg-[#05070b]">
         <div
           className="relative w-full min-h-[360px] sm:min-h-[420px] md:min-h-[480px] lg:min-h-[520px] flex items-center justify-center overflow-hidden"
@@ -285,15 +288,20 @@ export default function AnimeDetails() {
           }}
         >
           {bannerImg ? (
-            <img
-              src={bannerImg}
-              alt={anime.title}
-              className="absolute inset-0 w-full h-full pointer-events-none"
-              style={{
-                objectFit: 'cover',
-                objectPosition: 'center center',
-              }}
-            />
+            <div className="absolute inset-0 w-full h-full pointer-events-none">
+              <SmartImage
+                src={bannerImg}
+                alt={anime.title}
+                type="banner"
+                loading="eager"
+                className="w-full h-full"
+                style={{
+                  objectFit: 'cover',
+                  objectPosition: 'center center',
+                }}
+                titleFallback={anime.title}
+              />
+            </div>
           ) : (
             <div className="absolute inset-0 bg-[#0a0e17]" />
           )}
@@ -307,15 +315,17 @@ export default function AnimeDetails() {
           {/* 2. Poster Centered Vertically Over the Banner with Soft Shadow & Rounded Corners */}
           <div className="relative z-10 flex items-center justify-center px-4 py-8 sm:py-10">
             <div className="w-36 sm:w-48 md:w-56 lg:w-64 aspect-[2/3] rounded-2xl sm:rounded-3xl overflow-hidden glass-cyber-card border-2 border-white/20 shadow-[0_15px_45px_rgba(0,0,0,0.85)] hover:border-[#00e5ff]/80 transition-all duration-300 transform hover:scale-105">
-              <img
+              <SmartImage
                 src={posterImg}
                 alt={anime.title}
+                type="poster"
                 className="w-full h-full rounded-2xl sm:rounded-3xl"
                 style={{
                   objectFit: 'cover',
                   objectPosition: 'center center',
                 }}
                 loading="eager"
+                titleFallback={anime.title}
               />
             </div>
           </div>
@@ -557,19 +567,22 @@ export default function AnimeDetails() {
                       className="group flex flex-col glass-cyber-card rounded-2xl overflow-hidden border border-white/10 hover:border-[#00e5ff]/70 transition-all duration-300 hover:-translate-y-1.5 hover:shadow-[0_12px_30px_rgba(0,229,255,0.2)]"
                     >
                       <div className="relative w-full aspect-video bg-[#0a0e17] overflow-hidden">
-                        <img
+                        <SmartImage
                           src={
-                            ep.thumbnailUrl ||
-                            ep.thumbnail_url ||
-                            anime.bannerUrl ||
-                            anime.banner_url ||
-                            anime.posterUrl ||
                             anime.poster_url ||
+                            anime.posterUrl ||
+                            ep.thumbnail_url ||
+                            ep.thumbnailUrl ||
+                            anime.banner_url ||
+                            anime.bannerUrl ||
                             ''
                           }
                           alt={ep.title || `Episode ${ep.episodeNumber}`}
-                          className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500 opacity-90 group-hover:opacity-100"
+                          type="poster"
                           loading="lazy"
+                          className="w-full h-full group-hover:scale-105 transition-transform duration-500 opacity-90 group-hover:opacity-100"
+                          style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                          titleFallback={ep.title || `Episode ${ep.episodeNumber}`}
                         />
 
                         <div className="absolute top-2 left-2 z-10">

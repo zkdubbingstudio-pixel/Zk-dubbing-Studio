@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { getEpisodeById, getAnimeById, getSeasonsByAnimeId, getEpisodesByAnimeId, resolveEpisodeServers, saveUserProgress, getActiveEpisodesTable, getActiveAnimeTable } from '../lib/dataService';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
+import SmartImage from '../components/SmartImage';
 
 function isDirectVideo(url: string): boolean {
   if (!url) return false;
@@ -638,11 +639,14 @@ export default function WatchPage() {
                   className={`group flex flex-col rounded-[12px] overflow-hidden border transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_10px_30px_rgba(0,229,255,0.1)] ${isCurrent ? 'bg-brand/10 border-brand/50 shadow-[0_0_15px_rgba(0,229,255,0.15)]' : 'bg-white/5 border-white/10 hover:border-brand/50'}`}
                 >
                   <div className="relative w-full aspect-video bg-black/50 overflow-hidden">
-                    <img 
-                      src={ep.thumbnailUrl || ep.thumbnail_url || anime?.posterUrl || anime?.poster_url || ""} 
-                      alt={ep.title} 
-                      className={`w-full h-full object-cover transition-transform duration-500 opacity-90 group-hover:scale-105 group-hover:opacity-100 ${isCurrent ? 'opacity-100 scale-105' : ''}`} 
+                    <SmartImage 
+                      src={anime?.poster_url || anime?.posterUrl || ep.thumbnail_url || ep.thumbnailUrl || anime?.banner_url || anime?.bannerUrl || ""} 
+                      alt={ep.title || `Episode ${ep.episodeNumber}`} 
+                      type="poster"
                       loading="lazy"
+                      className={`w-full h-full transition-transform duration-500 opacity-90 group-hover:scale-105 group-hover:opacity-100 ${isCurrent ? 'opacity-100 scale-105' : ''}`} 
+                      style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                      titleFallback={ep.title || `Episode ${ep.episodeNumber}`}
                     />
                     <div className="absolute top-1 left-1 z-10">
                       <span className="bg-black/80 backdrop-blur-md text-white text-[10px] md:text-xs font-bold px-1.5 py-0.5 rounded border border-white/10 shadow-lg">

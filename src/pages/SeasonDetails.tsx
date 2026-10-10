@@ -2,6 +2,7 @@ import { useParams, Link } from 'react-router-dom';
 import { Play, Clock, ArrowLeft, Star, MonitorPlay } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { getAnimeById, getSeasonsByAnimeId, getEpisodesByAnimeId } from '../lib/dataService';
+import SmartImage from '../components/SmartImage';
 
 export default function SeasonDetails() {
   const { id, seasonId } = useParams();
@@ -64,13 +65,16 @@ export default function SeasonDetails() {
 
   return (
     <div className="min-h-screen bg-bg-base text-white pb-16">
-      {/* Banner */}
-      <div className="relative h-[300px] md:h-[400px] w-full">
-        <div className="absolute inset-0 bg-gradient-to-t from-bg-base via-bg-base/60 to-transparent z-10" />
-        <img 
-          src={currentSeason.bannerUrl || currentSeason.banner_url || anime?.bannerUrl || anime?.posterUrl || ""} 
+      {/* Banner (Requirements 1, 6, 9) */}
+      <div className="relative h-[300px] md:h-[400px] w-full overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-t from-bg-base via-bg-base/60 to-transparent z-10 pointer-events-none" />
+        <SmartImage 
+          src={anime?.banner_url || anime?.bannerUrl || currentSeason.banner_url || currentSeason.bannerUrl || anime?.poster_url || ""} 
           alt={currentSeason.title}
-          className="w-full h-full object-cover"
+          type="banner"
+          className="w-full h-full"
+          style={{ objectFit: 'cover', objectPosition: 'center center' }}
+          titleFallback={currentSeason.title}
         />
         
         {/* Navigation back */}
@@ -84,13 +88,18 @@ export default function SeasonDetails() {
 
       <div className="container mx-auto px-4 sm:px-6 relative z-20 -mt-24 md:-mt-32">
         <div className="flex flex-col md:flex-row gap-6 md:gap-10">
-          {/* Poster */}
+          {/* Poster (Requirements 2, 6, 9) */}
           <div className="w-40 md:w-64 flex-shrink-0 mx-auto md:mx-0">
-            <img 
-              src={currentSeason.posterUrl || currentSeason.poster_url || anime?.posterUrl || ""} 
-              alt={currentSeason.title}
-              className="w-full aspect-[2/3] object-cover rounded-xl shadow-2xl ring-1 ring-white/10"
-            />
+            <div className="w-full aspect-[2/3] rounded-xl overflow-hidden shadow-2xl ring-1 ring-white/10">
+              <SmartImage 
+                src={anime?.poster_url || anime?.posterUrl || currentSeason.poster_url || currentSeason.posterUrl || ""} 
+                alt={currentSeason.title}
+                type="poster"
+                className="w-full h-full"
+                style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                titleFallback={currentSeason.title}
+              />
+            </div>
           </div>
 
           {/* Season Info */}
@@ -137,12 +146,16 @@ export default function SeasonDetails() {
                 to={`/watch/${id}/${seasonId || ep.seasonId || 's1'}/${ep.id}`}
                 className="group flex flex-col sm:flex-row gap-4 p-3 pr-4 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/10 transition-all items-start sm:items-center bg-bg-surface/30"
               >
-                {/* Thumbnail container */}
+                {/* Thumbnail container (Requirements 2, 6, 9) */}
                 <div className="relative w-full sm:w-48 aspect-video rounded-lg overflow-hidden flex-shrink-0 bg-black/50">
-                  <img 
-                    src={ep.thumbnailUrl || ep.thumbnail_url || anime?.posterUrl || ""} 
-                    alt={ep.title}
-                    className="w-full h-full object-cover opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-300"
+                  <SmartImage 
+                    src={anime?.poster_url || anime?.posterUrl || ep.thumbnailUrl || ep.thumbnail_url || ""} 
+                    alt={ep.title || `Episode ${ep.episodeNumber || ep.episode_number}`}
+                    type="poster"
+                    loading="lazy"
+                    className="w-full h-full opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-300"
+                    style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                    titleFallback={ep.title || `Episode ${ep.episodeNumber || ep.episode_number}`}
                   />
                   <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/30">
                     <div className="w-10 h-10 rounded-full bg-brand flex items-center justify-center text-black pl-1 shadow-lg">

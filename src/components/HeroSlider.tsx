@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Play, Info, ChevronLeft, ChevronRight, Volume2, Sparkles, Star } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getEpisodesByAnimeId } from '../lib/dataService';
+import SmartImage from './SmartImage';
 
 interface HeroSliderProps {
   featuredList: any[];
@@ -123,7 +124,7 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
               isCurrent ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
             }`}
           >
-            {/* Parallax Background Image with scale & slight movement */}
+            {/* Parallax Background Image with scale & slight movement (Requirements 1, 6, 9) */}
             <div
               className="absolute inset-0 w-full h-full overflow-hidden transition-transform duration-500 ease-out"
               style={{
@@ -132,17 +133,20 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
                   : 'scale(1)',
               }}
             >
-              <img
+              <SmartImage
                 src={
-                  featured.bannerUrl ||
                   featured.banner_url ||
-                  featured.posterUrl ||
+                  featured.bannerUrl ||
                   featured.poster_url ||
+                  featured.posterUrl ||
                   ''
                 }
                 alt={featured.title}
-                className="w-full h-full object-cover object-center"
+                type="banner"
+                className="w-full h-full"
+                style={{ objectFit: 'cover', objectPosition: 'center center' }}
                 loading={isCurrent ? 'eager' : 'lazy'}
+                titleFallback={featured.title}
               />
 
               {/* Light transparent overlay (15-20%) for text readability while keeping full brightness */}
