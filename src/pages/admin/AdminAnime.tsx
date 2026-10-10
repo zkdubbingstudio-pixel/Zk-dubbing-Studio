@@ -6,10 +6,10 @@ import {
   Database, RefreshCw, Copy, ExternalLink, Play, Layers
 } from 'lucide-react';
 import { 
-  getAllAnime, saveAnimeBoth, deleteAnimeBoth, 
+  getAllAnime, saveAnimeBoth, deleteAnimeBoth, insertAnime, updateAnime,
   extractAbyssUrl, extractFileMoonUrl, extractVDOHideUrl,
   detectActualTableNames, getActiveAnimeTable, triggerAutoMigration, refreshSupabaseSchemaCache,
-  getSeasonsByAnimeId, saveSeasonBoth, deleteSeasonBoth
+  getSeasonsByAnimeId, saveSeasonBoth, deleteSeasonBoth, formatDbError
 } from '../../lib/dataService';
 import ImageUpload from '../../components/admin/ImageUpload';
 import { logAdminActivity } from '../../lib/activityLogger';
@@ -98,7 +98,8 @@ export default function AdminAnime() {
       const list = await getAllAnime();
       setAnimeList(list || []);
     } catch (err: any) {
-      const exactMsg = err?.message || String(err);
+      const exactMsg = formatDbError(err);
+      console.error("[Supabase Real Error - AdminAnime fetch]:", err);
       setError(`Failed to load anime catalog: ${exactMsg}`);
     } finally {
       setLoading(false);
@@ -107,6 +108,20 @@ export default function AdminAnime() {
 
   useEffect(() => {
     fetchAnimeData();
+
+    const handleRefresh = () => {
+      fetchAnimeData();
+    };
+
+    window.addEventListener('zk_anime_published', handleRefresh);
+    window.addEventListener('zk_anime_deleted', handleRefresh);
+    window.addEventListener('zk_data_changed', handleRefresh);
+
+    return () => {
+      window.removeEventListener('zk_anime_published', handleRefresh);
+      window.removeEventListener('zk_anime_deleted', handleRefresh);
+      window.removeEventListener('zk_data_changed', handleRefresh);
+    };
   }, []);
 
   const handleRunMigration = async () => {
@@ -393,9 +408,8 @@ NOTIFY pgrst, 'reload schema';`;
       const refreshed = await getAllAnime();
       setAnimeList(refreshed);
     } catch (err: any) {
-      console.error("Error saving anime:", err);
-      // Requirement 8: Show the exact database error if saving fails
-      const exactMsg = err?.message || String(err);
+      console.error("[Supabase Real Error - save anime]:", err);
+      const exactMsg = formatDbError(err);
       setError(`Database Error: ${exactMsg}`);
     } finally {
       setSaving(false);
@@ -411,9 +425,8 @@ NOTIFY pgrst, 'reload schema';`;
         setSuccessMsg('Anime deleted successfully.');
         setTimeout(() => setSuccessMsg(null), 3000);
       } catch (err: any) {
-        console.error("Error deleting anime:", err);
-        // Requirement 8: Show the exact database error if saving/deleting fails
-        const exactMsg = err?.message || String(err);
+        console.error("[Supabase Real Error - delete anime]:", err);
+        const exactMsg = formatDbError(err);
         setError(`Database Error: ${exactMsg}`);
       }
     }

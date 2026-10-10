@@ -18,7 +18,7 @@ export default function AdminAnalytics() {
       try {
         const [animes, eps] = await Promise.all([
           getAllAnime().catch(() => []),
-          getAllEpisodes().catch(() => []),
+          getAllEpisodes(false).catch(() => []),
         ]);
         setAnimeList(animes || []);
         setEpisodesList(eps || []);

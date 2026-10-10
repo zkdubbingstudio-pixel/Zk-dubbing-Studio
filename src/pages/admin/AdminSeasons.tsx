@@ -4,7 +4,7 @@ import {
   CheckCircle2, AlertCircle, Sparkles, ArrowUp, ArrowDown, 
   Search, Film, Activity, ChevronRight 
 } from 'lucide-react';
-import { getAllAnime, getAllSeasons, saveSeasonBoth, deleteSeasonBoth } from '../../lib/dataService';
+import { getAllAnime, getAllSeasons, saveSeasonBoth, deleteSeasonBoth, formatDbError } from '../../lib/dataService';
 import ImageUpload from '../../components/admin/ImageUpload';
 import { logAdminActivity } from '../../lib/activityLogger';
 
@@ -53,6 +53,18 @@ export default function AdminSeasons() {
 
   useEffect(() => {
     fetchData();
+
+    const handleUpdate = () => {
+      fetchData();
+    };
+
+    window.addEventListener('zk_data_changed', handleUpdate);
+    window.addEventListener('zk_anime_published', handleUpdate);
+
+    return () => {
+      window.removeEventListener('zk_data_changed', handleUpdate);
+      window.removeEventListener('zk_anime_published', handleUpdate);
+    };
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -87,9 +99,9 @@ export default function AdminSeasons() {
       resetForm();
       await fetchData();
     } catch (err: any) {
-      console.error("Error saving season:", err);
-      // Requirement 8: Show exact database error if saving fails
-      setError(`Database Error: ${err?.message || String(err)}`);
+      console.error("[Supabase Real Error - save season]:", err);
+      const exactMsg = formatDbError(err);
+      setError(`Database Error: ${exactMsg}`);
     } finally {
       setSaving(false);
     }
@@ -104,8 +116,9 @@ export default function AdminSeasons() {
         setSuccessMsg('Season deleted successfully.');
         setTimeout(() => setSuccessMsg(null), 3000);
       } catch (err: any) {
-        console.error("Error deleting season:", err);
-        setError(`Database Error: ${err?.message || String(err)}`);
+        console.error("[Supabase Real Error - delete season]:", err);
+        const exactMsg = formatDbError(err);
+        setError(`Database Error: ${exactMsg}`);
       }
     }
   };

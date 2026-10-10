@@ -30,7 +30,7 @@ export default function AdminMedia() {
       const [animes, seasons, episodes] = await Promise.all([
         getAllAnime().catch(() => []),
         getAllSeasons().catch(() => []),
-        getAllEpisodes().catch(() => []),
+        getAllEpisodes(false).catch(() => []),
       ]);
 
       const items: MediaItem[] = [];

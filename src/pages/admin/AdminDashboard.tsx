@@ -21,7 +21,7 @@ export default function AdminDashboard() {
       const [animes, seasons, episodes] = await Promise.all([
         getAllAnime().catch(() => []),
         getAllSeasons().catch(() => []),
-        getAllEpisodes().catch(() => []),
+        getAllEpisodes(false).catch(() => []),
       ]);
 
       setAnimeList(animes || []);
@@ -41,6 +41,20 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchDashboardData();
+
+    const handleUpdate = () => {
+      fetchDashboardData();
+    };
+
+    window.addEventListener('zk_data_changed', handleUpdate);
+    window.addEventListener('zk_anime_published', handleUpdate);
+    window.addEventListener('zk_episode_published', handleUpdate);
+
+    return () => {
+      window.removeEventListener('zk_data_changed', handleUpdate);
+      window.removeEventListener('zk_anime_published', handleUpdate);
+      window.removeEventListener('zk_episode_published', handleUpdate);
+    };
   }, []);
 
   // Compute Required Metric Values

@@ -36,6 +36,14 @@ export default function SeasonDetails() {
     };
     fetchData();
 
+    const handleUpdate = () => {
+      fetchData();
+    };
+
+    window.addEventListener('zk_episode_published', handleUpdate);
+    window.addEventListener('zk_episodes_changed', handleUpdate);
+    window.addEventListener('zk_data_changed', handleUpdate);
+
     const tenSec = setTimeout(() => {
       if (isMounted) setLoading(false);
     }, 10000);
@@ -43,6 +51,9 @@ export default function SeasonDetails() {
     return () => { 
       isMounted = false; 
       clearTimeout(tenSec);
+      window.removeEventListener('zk_episode_published', handleUpdate);
+      window.removeEventListener('zk_episodes_changed', handleUpdate);
+      window.removeEventListener('zk_data_changed', handleUpdate);
     };
   }, [id, seasonId]);
 

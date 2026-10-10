@@ -95,17 +95,25 @@ export default function Home() {
       setRetrying(false);
     }, 12000);
 
-    const handleEpisodeDeleted = () => {
-      getNewDrops().then(drops => {
-        setNewDrops(drops || []);
-      }).catch(() => {});
+    const handleDataUpdate = () => {
+      fetchData();
     };
 
-    window.addEventListener('zk_episode_deleted', handleEpisodeDeleted);
+    window.addEventListener('zk_episode_published', handleDataUpdate);
+    window.addEventListener('zk_episode_deleted', handleDataUpdate);
+    window.addEventListener('zk_episodes_changed', handleDataUpdate);
+    window.addEventListener('zk_anime_published', handleDataUpdate);
+    window.addEventListener('zk_anime_deleted', handleDataUpdate);
+    window.addEventListener('zk_data_changed', handleDataUpdate);
 
     return () => {
       clearTimeout(loadSafetyTimeout);
-      window.removeEventListener('zk_episode_deleted', handleEpisodeDeleted);
+      window.removeEventListener('zk_episode_published', handleDataUpdate);
+      window.removeEventListener('zk_episode_deleted', handleDataUpdate);
+      window.removeEventListener('zk_episodes_changed', handleDataUpdate);
+      window.removeEventListener('zk_anime_published', handleDataUpdate);
+      window.removeEventListener('zk_anime_deleted', handleDataUpdate);
+      window.removeEventListener('zk_data_changed', handleDataUpdate);
     };
   }, [fetchData]);
 
@@ -183,7 +191,30 @@ export default function Home() {
         <ContinueWatchingRow />
 
         {/* 3. New Drops Carousel with 3D Anime Cards */}
-        {newDrops.length > 0 && (
+        {loading ? (
+          <section className="px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-end mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-[#00e5ff]/15 flex items-center justify-center border border-[#00e5ff]/30 shadow-[0_0_15px_rgba(0,229,255,0.3)]">
+                  <Sparkles className="w-5 h-5 text-brand animate-pulse" />
+                </div>
+                <div>
+                  <h2 className="text-xl sm:text-2xl md:text-3xl font-black text-silver-light tracking-tight">
+                    New Drops
+                  </h2>
+                  <p className="text-xs text-silver-dark font-medium hidden sm:block">
+                    Fresh episodes released by ZK Dubbing Studio
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-4 sm:gap-5 pb-6 overflow-hidden">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="flex-none w-64 sm:w-72 md:w-80 aspect-video rounded-3xl bg-white/5 border border-white/10 skeleton-shimmer" />
+              ))}
+            </div>
+          </section>
+        ) : newDrops.length > 0 ? (
           <section className="px-4 sm:px-6 lg:px-8">
             <div className="flex justify-between items-end mb-6">
               <div className="flex items-center gap-3">
@@ -226,6 +257,31 @@ export default function Home() {
                   />
                 );
               })}
+            </div>
+          </section>
+        ) : (
+          <section className="px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-end mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-[#00e5ff]/15 flex items-center justify-center border border-[#00e5ff]/30 shadow-[0_0_15px_rgba(0,229,255,0.3)]">
+                  <Sparkles className="w-5 h-5 text-brand" />
+                </div>
+                <div>
+                  <h2 className="text-xl sm:text-2xl md:text-3xl font-black text-silver-light tracking-tight">
+                    New Drops
+                  </h2>
+                  <p className="text-xs text-silver-dark font-medium hidden sm:block">
+                    Fresh episodes released by ZK Dubbing Studio
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="text-center py-10 px-4 glass-cyber-card rounded-3xl border border-white/5 space-y-2">
+              <Film className="w-8 h-8 text-silver-dark mx-auto mb-2 opacity-50" />
+              <p className="text-sm font-bold text-silver-light">No Episodes Found</p>
+              <p className="text-xs text-silver-dark max-w-sm mx-auto">
+                No recent episode drops in the database. Published episodes will appear here immediately.
+              </p>
             </div>
           </section>
         )}

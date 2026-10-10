@@ -7,7 +7,8 @@ import {
 import { 
   getAllAnime, getAllSeasons, getAllEpisodes, 
   saveEpisodeBoth, deleteEpisodeBoth, saveSeasonBoth,
-  extractAbyssUrl, extractFileMoonUrl, extractVDOHideUrl, resolveEpisodeServers 
+  extractAbyssUrl, extractFileMoonUrl, extractVDOHideUrl, resolveEpisodeServers,
+  formatDbError 
 } from '../../lib/dataService';
 import ImageUpload from '../../components/admin/ImageUpload';
 import { logAdminActivity } from '../../lib/activityLogger';
@@ -62,15 +63,17 @@ export default function AdminEpisodes() {
     try {
       setError(null);
       const [animes, seasonsList, epList] = await Promise.all([
-        getAllAnime().catch(() => []),
-        getAllSeasons().catch(() => []),
-        getAllEpisodes().catch(() => []),
+        getAllAnime(),
+        getAllSeasons(),
+        getAllEpisodes(false), // Fetch all episodes including drafts for admin
       ]);
       setAnimeList(animes || []);
       setSeasons(seasonsList || []);
       setEpisodes(epList || []);
-    } catch {
-      setError("Failed to load episodes.");
+    } catch (err: any) {
+      console.error("[Supabase Real Error - AdminEpisodes fetchData]:", err);
+      const exactMsg = formatDbError(err);
+      setError(`Database Error: ${exactMsg}`);
     } finally {
       setLoading(false);
     }
@@ -78,6 +81,22 @@ export default function AdminEpisodes() {
 
   useEffect(() => {
     fetchData();
+
+    const handleRefresh = () => {
+      fetchData();
+    };
+
+    window.addEventListener('zk_episode_published', handleRefresh);
+    window.addEventListener('zk_episode_deleted', handleRefresh);
+    window.addEventListener('zk_episodes_changed', handleRefresh);
+    window.addEventListener('zk_data_changed', handleRefresh);
+
+    return () => {
+      window.removeEventListener('zk_episode_published', handleRefresh);
+      window.removeEventListener('zk_episode_deleted', handleRefresh);
+      window.removeEventListener('zk_episodes_changed', handleRefresh);
+      window.removeEventListener('zk_data_changed', handleRefresh);
+    };
   }, []);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -186,9 +205,9 @@ export default function AdminEpisodes() {
       // Requirement 6: After saving, refresh the episode list
       await fetchData();
     } catch (err: any) {
-      console.error("Error saving episode:", err);
-      // Requirement 8: Show exact database error if saving fails
-      setError(`Database Error: ${err?.message || String(err)}`);
+      console.error("[Supabase Real Error - saving episode]:", err);
+      const exactMsg = formatDbError(err);
+      setError(`Database Error: ${exactMsg}`);
     } finally {
       setSaving(false);
     }
@@ -246,8 +265,8 @@ export default function AdminEpisodes() {
       setSuccessMsg("Episode deleted successfully.");
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
-      console.error("Error deleting episode:", err);
-      const exactError = err?.message || (typeof err === 'string' ? err : 'Unknown error occurred while deleting episode.');
+      console.error("[Supabase Real Error - deleting episode]:", err);
+      const exactError = formatDbError(err);
       setDeleteDialogError(exactError);
       setError(`Failed to delete episode: ${exactError}`);
     } finally {

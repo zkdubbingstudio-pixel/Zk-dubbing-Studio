@@ -33,16 +33,57 @@ export const supabaseKey = (
 export const SUPABASE_TIMEOUT_MS = 12000;
 export const SUPABASE_MAX_RETRIES = 2;
 
-// Prefer local proxy in browser to guarantee zero CORS issues and reliable execution
-let preferProxy = typeof window !== 'undefined';
+/**
+ * Robust database error formatter to guarantee the real Supabase error is logged
+ * and displayed instead of "[object Object]".
+ */
+export function formatDbError(err: any): string {
+  if (!err) return 'Unknown database error';
+  if (typeof err === 'string') return err;
+
+  const code = err.code || err.statusCode || (err.error && err.error.code) || '';
+  const message = err.message || (err.error && err.error.message) || err.error_description || (typeof err.error === 'string' ? err.error : '');
+  const details = err.details || (err.error && err.error.details) || '';
+  const hint = err.hint || (err.error && err.error.hint) || '';
+
+  let result = '';
+  if (code) {
+    result += `[${code}] `;
+  }
+  if (message && typeof message === 'string' && message !== '[object Object]') {
+    result += message;
+  } else {
+    try {
+      const json = JSON.stringify(err);
+      if (json && json !== '{}' && json !== '[]') {
+        result += json;
+      } else {
+        result += err.name || 'Database query error';
+      }
+    } catch {
+      result += err.name || 'Database query error';
+    }
+  }
+
+  if (details && typeof details === 'string' && details !== message) {
+    result += ` - Details: ${details}`;
+  }
+  if (hint && typeof hint === 'string') {
+    result += ` (Hint: ${hint})`;
+  }
+
+  return result.trim() || 'Database error occurred';
+}
 
 /**
- * Custom fetch with abort timeout, project URL verification, and proxy fallback
+ * Custom fetch with abort timeout and URL validation.
+ * Crucial fix: Directly fetches Supabase URL natively with browser CORS.
+ * Does NOT hijack requests to /api/supabase-proxy so published website works seamlessly.
  */
 async function customFetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 
-  // Strict check: only allow requests to the verified new project URL or the internal proxy
+  // Strict check: only allow requests to the verified new project URL or local proxy
   const isDirectSupabase = urlStr.startsWith(supabaseUrl);
   const isProxyUrl = urlStr.includes('/api/supabase-proxy');
 
@@ -51,9 +92,6 @@ async function customFetchWithTimeout(input: RequestInfo | URL, init?: RequestIn
     console.warn(`[Supabase Guard Blocked]: ${blockedMsg}`);
     throw new Error(blockedMsg);
   }
-
-  // Derive internal proxy URL if direct request fails or if proxy is preferred
-  const proxyPath = isDirectSupabase ? urlStr.replace(supabaseUrl, '/api/supabase-proxy') : urlStr;
 
   let lastError: any = null;
 
@@ -68,9 +106,8 @@ async function customFetchWithTimeout(input: RequestInfo | URL, init?: RequestIn
     }
 
     try {
-      // If preferProxy is true, route to proxy first; otherwise direct
-      const targetToFetch = preferProxy ? proxyPath : input;
-      const response = await fetch(targetToFetch, {
+      // Primary execution: direct fetch to Supabase (fully supported by CORS on dev & published sites)
+      const response = await fetch(input, {
         ...init,
         signal: controller.signal,
       });
@@ -87,13 +124,13 @@ async function customFetchWithTimeout(input: RequestInfo | URL, init?: RequestIn
       clearTimeout(timeoutId);
       lastError = err;
 
-      // Switch mode if preferred path failed
-      if (preferProxy) {
-        // Proxy failed, try direct on next attempt
-        preferProxy = false;
-      } else {
-        // Direct failed (e.g. CORS), switch to proxy
-        preferProxy = true;
+      // In local dev preview only, if direct fetch failed due to network sandbox, fallback to dev proxy
+      if (typeof window !== 'undefined' && import.meta.env.DEV && isDirectSupabase) {
+        try {
+          const proxyPath = urlStr.replace(supabaseUrl, '/api/supabase-proxy');
+          const proxyRes = await fetch(proxyPath, init);
+          if (proxyRes.ok) return proxyRes;
+        } catch {}
       }
 
       if (attempt < SUPABASE_MAX_RETRIES) {
@@ -120,7 +157,7 @@ export const supabase = createClient(supabaseUrl, supabaseKey || 'pending-key', 
 });
 
 /**
- * Health check helper to test active connectivity to Supabase (Requirement 5)
+ * Health check helper to test active connectivity to Supabase
  */
 export async function checkSupabaseConnection(): Promise<{ ok: boolean; message: string; latencyMs?: number }> {
   const start = Date.now();
@@ -131,18 +168,52 @@ export async function checkSupabaseConnection(): Promise<{ ok: boolean; message:
     };
   }
   try {
-    const table = (typeof window !== 'undefined' && localStorage.getItem('zk_active_anime_table')) || 'anime';
-    const { error } = await supabase.from(table).select('id', { count: 'exact', head: true });
+    const { error } = await supabase.from('anime').select('id', { count: 'exact', head: true });
     if (error) {
-      // PGRST205 indicates successful connection and valid auth, but tables are pending in the new database
+      const formatted = formatDbError(error);
+      console.error('[Supabase Real Error - checkSupabaseConnection]:', error);
+      // PGRST205 indicates schema cache notice
       if (error.code === 'PGRST205' || error.message?.includes('schema cache')) {
-        return { ok: true, message: `Connected (Table '${table}' in schema cache verification)`, latencyMs: Date.now() - start };
+        return { ok: true, message: `Connected (Schema cache verification)`, latencyMs: Date.now() - start };
       }
-      return { ok: false, message: error.message || 'Supabase query returned error' };
+      return { ok: false, message: formatted };
     }
     return { ok: true, message: 'Connected', latencyMs: Date.now() - start };
   } catch (err: any) {
-    return { ok: false, message: err?.message || 'Network unreachable' };
+    const formatted = formatDbError(err);
+    console.error('[Supabase Real Error - checkSupabaseConnection exception]:', err);
+    return { ok: false, message: formatted };
+  }
+}
+
+/**
+ * Pre-flight verification of RLS policies on all three primary tables:
+ * public.anime, public.seasons, public.episodes
+ */
+export async function verifyRlsPolicies(): Promise<{ ok: boolean; anime: boolean; seasons: boolean; episodes: boolean; error?: string }> {
+  try {
+    const [aRes, sRes, eRes] = await Promise.all([
+      supabase.from('anime').select('id', { head: true, count: 'exact' }),
+      supabase.from('seasons').select('id', { head: true, count: 'exact' }),
+      supabase.from('episodes').select('id', { head: true, count: 'exact' }),
+    ]);
+
+    const aOk = !aRes.error;
+    const sOk = !sRes.error;
+    const eOk = !eRes.error;
+
+    if (!aOk || !sOk || !eOk) {
+      const err = aRes.error || sRes.error || eRes.error;
+      const formatted = formatDbError(err);
+      console.warn('[RLS Verification Notice]:', formatted, { anime: aOk, seasons: sOk, episodes: eOk });
+      return { ok: false, anime: aOk, seasons: sOk, episodes: eOk, error: formatted };
+    }
+
+    return { ok: true, anime: true, seasons: true, episodes: true };
+  } catch (err: any) {
+    const formatted = formatDbError(err);
+    console.error('[RLS Verification Exception]:', formatted);
+    return { ok: false, anime: false, seasons: false, episodes: false, error: formatted };
   }
 }
 

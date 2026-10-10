@@ -261,12 +261,23 @@ export default function WatchPage() {
         }
       }
     };
+
+    const handleEpisodeUpdated = () => {
+      fetchData();
+    };
+
     window.addEventListener('zk_episode_deleted', handleEpisodeDeleted);
+    window.addEventListener('zk_episode_published', handleEpisodeUpdated);
+    window.addEventListener('zk_episodes_changed', handleEpisodeUpdated);
+    window.addEventListener('zk_data_changed', handleEpisodeUpdated);
 
     return () => { 
       isMounted = false; 
       clearTimeout(tenSec);
       window.removeEventListener('zk_episode_deleted', handleEpisodeDeleted);
+      window.removeEventListener('zk_episode_published', handleEpisodeUpdated);
+      window.removeEventListener('zk_episodes_changed', handleEpisodeUpdated);
+      window.removeEventListener('zk_data_changed', handleEpisodeUpdated);
     };
   }, [paramId, paramAnimeId, paramSeasonId]);
 
