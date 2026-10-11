@@ -42,7 +42,7 @@ export default function AdminMedia() {
         if (poster) {
           items.push({
             id: `anime-poster-${anime.id}`,
-            url: resolveImageUrl(poster, 'posters'),
+            url: poster.trim(),
             type: 'poster',
             title: `${anime.title} (Poster)`,
             parentTitle: anime.title,
@@ -53,7 +53,7 @@ export default function AdminMedia() {
         if (banner) {
           items.push({
             id: `anime-banner-${anime.id}`,
-            url: resolveImageUrl(banner, 'banners'),
+            url: banner.trim(),
             type: 'banner',
             title: `${anime.title} (Banner)`,
             parentTitle: anime.title,
@@ -67,7 +67,7 @@ export default function AdminMedia() {
         if (banner) {
           items.push({
             id: `season-banner-${season.id}`,
-            url: resolveImageUrl(banner, 'banners'),
+            url: banner.trim(),
             type: 'banner',
             title: `${season.title || 'Season'} (Banner)`,
             parentTitle: `Season ${season.seasonNumber || 1}`,
@@ -81,7 +81,7 @@ export default function AdminMedia() {
         if (thumb) {
           items.push({
             id: `ep-thumb-${ep.id}`,
-            url: resolveImageUrl(thumb, 'thumbnails'),
+            url: thumb.trim(),
             type: 'thumbnail',
             title: ep.title ? `Ep ${ep.episodeNumber}: ${ep.title}` : `Episode ${ep.episodeNumber}`,
             parentTitle: `Episode ${ep.episodeNumber}`,
