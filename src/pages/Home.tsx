@@ -1,7 +1,16 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Flame, Sparkles, Trophy, Compass, Film, RotateCcw, AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { getFeaturedAnime, getTrendingAnime, getNewDrops, getAllAnime, isSchemaCachePending, getActiveAnimeTable } from '../lib/dataService';
+import {
+  getUnifiedCatalog,
+  preloadFirst6HomeImages,
+  getFeaturedAnime,
+  getTrendingAnime,
+  getNewDrops,
+  getAllAnime,
+  isSchemaCachePending,
+  getActiveAnimeTable,
+} from '../lib/dataService';
 import { checkSupabaseConnection, supabaseUrl } from '../lib/supabase';
 import HeroSlider from '../components/HeroSlider';
 import AnimeCard3D from '../components/AnimeCard3D';
@@ -50,7 +59,24 @@ export default function Home() {
         return;
       }
 
-      // Use Promise.allSettled to load whatever data resolves immediately (Requirement 3)
+      // Requirement 5: Load anime, seasons and episodes using a single optimized query
+      // Requirement 6: Cache API responses for 5 minutes
+      const catalog = await getUnifiedCatalog();
+
+      if (catalog && catalog.allAnime && catalog.allAnime.length > 0) {
+        setFeaturedList(catalog.featuredAnime);
+        setTrending(catalog.trendingAnime);
+        setNewDrops(catalog.newDrops);
+        setAllAnime(catalog.allAnime);
+        // Requirement 7: Preload only the first 6 home page images
+        preloadFirst6HomeImages(catalog);
+        setError(null);
+        setLoading(false);
+        setRetrying(false);
+        return;
+      }
+
+      // Resilient fallback if catalog was completely empty
       const [featuredRes, trendingRes, dropsRes, allAnimeRes] = await Promise.allSettled([
         getFeaturedAnime(),
         getTrendingAnime(),
@@ -63,11 +89,9 @@ export default function Home() {
       let trend = trendingRes.status === 'fulfilled' ? trendingRes.value : [];
       const drops = dropsRes.status === 'fulfilled' ? dropsRes.value : [];
 
-      // If featured was empty or failed, use latest 6 from all
       if (feat.length === 0 && all.length > 0) {
         feat = all.slice(0, 6);
       }
-      // If trending was empty or failed, use top viewed from all
       if (trend.length === 0 && all.length > 0) {
         trend = [...all].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 10);
       }
@@ -76,6 +100,15 @@ export default function Home() {
       setTrending(trend);
       setNewDrops(drops);
       setAllAnime(all);
+      // Requirement 7: Preload first 6 home page images from resolved lists
+      preloadFirst6HomeImages({
+        allAnime: all,
+        featuredAnime: feat,
+        trendingAnime: trend,
+        newDrops: drops,
+        allSeasons: [],
+        allEpisodes: [],
+      });
       setError(null);
       setLoading(false);
       setRetrying(false);

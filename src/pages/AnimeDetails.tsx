@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuthStore } from '../store/authStore';
 import SmartImage from '../components/SmartImage';
 import { 
+  getAnimeFullDetails,
   getAnimeById, 
   getSeasonsByAnimeId, 
   getEpisodesByAnimeId, 
@@ -21,7 +22,6 @@ export default function AnimeDetails() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const [prevId, setPrevId] = useState(id);
   const [anime, setAnime] = useState<any>(location.state?.anime?.id === id && location.state?.anime?.title ? location.state.anime : null);
   const [seasons, setSeasons] = useState<any[]>([]);
   const [allEpisodes, setAllEpisodes] = useState<any[]>([]);
@@ -88,29 +88,16 @@ export default function AnimeDetails() {
     }
   };
 
-  // Reset state during render when route param changes
-  if (id !== prevId) {
-    setPrevId(id);
-    const incomingAnime = location.state?.anime?.id === id && location.state?.anime?.title ? location.state.anime : null;
-    setAnime(incomingAnime);
-    setSeasons([]);
-    setAllEpisodes([]);
-    setSelectedSeason('');
-    setInitialLoading(true);
-  }
-
   useEffect(() => {
     if (!id) return;
     let isMounted = true;
+    setInitialLoading(true);
 
     const fetchData = async () => {
       try {
-        // Fetch anime, seasons, and episodes in parallel (Performance Requirement 6)
-        const [animeData, seasonsData, episodesData] = await Promise.all([
-          getAnimeById(id),
-          getSeasonsByAnimeId(id),
-          getEpisodesByAnimeId(id),
-        ]);
+        // Requirement 5: Load anime, seasons and episodes using a SINGLE optimized query
+        // Requirement 6: Cache API responses for 5 minutes
+        const { anime: animeData, seasons: seasonsData, episodes: episodesData } = await getAnimeFullDetails(id);
 
         if (!isMounted) return;
 
@@ -127,19 +114,8 @@ export default function AnimeDetails() {
           navigate(`/anime/${animeData.id}`, { replace: true });
         }
 
-        const targetAnimeId = animeData.id;
         let fetchedEpisodes = episodesData || [];
         let fetchedSeasons = seasonsData || [];
-
-        // If anime ID resolved differently from requested id, re-fetch seasons/episodes if needed
-        if (targetAnimeId !== id && fetchedEpisodes.length === 0) {
-          const [sData, eData] = await Promise.all([
-            getSeasonsByAnimeId(targetAnimeId),
-            getEpisodesByAnimeId(targetAnimeId),
-          ]);
-          if (sData && sData.length > 0) fetchedSeasons = sData;
-          if (eData && eData.length > 0) fetchedEpisodes = eData;
-        }
 
         if (isMounted) {
           setAllEpisodes(fetchedEpisodes);
@@ -154,7 +130,7 @@ export default function AnimeDetails() {
           if (effectiveSeasons.length === 0) {
             effectiveSeasons = [{
               id: 's1',
-              animeId: targetAnimeId,
+              animeId: animeData.id,
               seasonNumber: 1,
               title: 'Season 1',
               order: 1

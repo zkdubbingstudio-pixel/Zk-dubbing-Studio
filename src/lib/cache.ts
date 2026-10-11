@@ -1,4 +1,4 @@
-export const CACHE_TTL = 30 * 60 * 1000; // 30 minutes active TTL
+export const CACHE_TTL = 5 * 60 * 1000; // 5 minutes active TTL (Requirement 6)
 export const EXTENDED_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days fallback TTL
 
 // Fast in-memory cache to prevent duplicate parses and instant retrieval

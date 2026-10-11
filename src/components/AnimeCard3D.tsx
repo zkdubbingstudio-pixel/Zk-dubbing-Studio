@@ -15,7 +15,7 @@ interface AnimeCard3DProps {
   customPlayLink?: string;
 }
 
-export default function AnimeCard3D({
+const AnimeCard3D = React.memo(function AnimeCard3D({
   anime,
   rank,
   badgeTopLeft,
@@ -245,4 +245,6 @@ export default function AnimeCard3D({
       </Link>
     </div>
   );
-}
+});
+
+export default AnimeCard3D;

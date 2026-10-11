@@ -1,7 +1,17 @@
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, SkipForward, SkipBack, Server } from 'lucide-react';
-import { useState, useEffect } from 'react';
-import { getEpisodeById, getAnimeById, getSeasonsByAnimeId, getEpisodesByAnimeId, resolveEpisodeServers, saveUserProgress, getActiveEpisodesTable, getActiveAnimeTable } from '../lib/dataService';
+import { ArrowLeft, Play, SkipForward, SkipBack, Server, RotateCcw, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { 
+  getEpisodeById, 
+  getAnimeById, 
+  getAnimeFullDetails,
+  getSeasonsByAnimeId, 
+  getEpisodesByAnimeId, 
+  resolveEpisodeServers, 
+  saveUserProgress, 
+  getActiveEpisodesTable, 
+  getActiveAnimeTable 
+} from '../lib/dataService';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
 import SmartImage from '../components/SmartImage';
@@ -43,6 +53,10 @@ export default function WatchPage() {
   const [error, setError] = useState<string | null>(null);
   const [isVideoLoading, setIsVideoLoading] = useState(true);
   const [selectedServer, setSelectedServer] = useState<'server1' | 'server2' | 'server3'>('server1');
+  const [serverSlowError, setServerSlowError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState<number>(0);
+  const retriedServersRef = useRef<Record<string, boolean>>({});
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const navigate = useNavigate();
   const { user } = useAuthStore();
@@ -162,22 +176,20 @@ export default function WatchPage() {
           return;
         }
 
-        // Load anime details if not already loaded
-        if (!animeData && effectiveAnimeId) {
-          animeData = await getAnimeById(effectiveAnimeId);
-        }
-
         let fetchedSeasons: any[] = [];
         let sEps: any[] = [];
         if (effectiveAnimeId) {
-          const [seasonsRes, epsRes] = await Promise.all([
-            getSeasonsByAnimeId(effectiveAnimeId),
-            getEpisodesByAnimeId(effectiveAnimeId, epData.seasonId || effectiveSeasonId),
-          ]);
-          fetchedSeasons = seasonsRes || [];
-          sEps = epsRes || [];
+          // Requirement 5: Load anime, seasons and episodes using a single optimized query
+          // Requirement 6: Cache API responses for 5 minutes
+          const full = await getAnimeFullDetails(effectiveAnimeId);
+          if (full.anime) animeData = full.anime;
+          fetchedSeasons = full.seasons || [];
+          const targetSeasonId = epData.seasonId || effectiveSeasonId;
+          if (targetSeasonId && targetSeasonId !== 'all') {
+            sEps = full.episodes.filter(e => (e.seasonId || e.season_id) === targetSeasonId);
+          }
           if (sEps.length === 0) {
-            sEps = await getEpisodesByAnimeId(effectiveAnimeId);
+            sEps = full.episodes || [];
           }
         }
 
@@ -326,24 +338,76 @@ export default function WatchPage() {
     }
   }, [episode?.id, paramId, hasServer1, hasServer2, hasServer3]);
 
-  const activeStreamUrl = 
-    effectiveServer === 'server1' ? server1Url :
-    effectiveServer === 'server2' ? server2Url :
-    effectiveServer === 'server3' ? server3Url : '';
+  const activeStreamUrl = useMemo(() => {
+    let url = effectiveServer === 'server1' ? server1Url :
+              effectiveServer === 'server2' ? server2Url :
+              effectiveServer === 'server3' ? server3Url : '';
+    if (url && retryCount > 0) {
+      const sep = url.includes('?') ? '&' : '?';
+      return `${url}${sep}_zk_retry=${retryCount}`;
+    }
+    return url;
+  }, [effectiveServer, server1Url, server2Url, server3Url, retryCount]);
 
-  // Auto-hide video loading spinner after timeout
+  // Reset retry state when episode or server changes
   useEffect(() => {
-    setIsVideoLoading(true);
-    const timer = setTimeout(() => {
+    setRetryCount(0);
+    setServerSlowError(null);
+  }, [episode?.id, paramId, effectiveServer]);
+
+  // Requirement 9: Improve video player performance & preload metadata
+  // Requirement 10: If FileMoon or VDOHide is slow, automatically retry once before showing error
+  useEffect(() => {
+    if (!activeStreamUrl) {
       setIsVideoLoading(false);
-    }, 2000);
-    return () => clearTimeout(timer);
-  }, [effectiveServer, activeStreamUrl]);
+      return;
+    }
+
+    setIsVideoLoading(true);
+    setServerSlowError(null);
+
+    // Preconnect to stream host
+    try {
+      const parsed = new URL(activeStreamUrl);
+      const preconnectLink = document.createElement('link');
+      preconnectLink.rel = 'preconnect';
+      preconnectLink.href = parsed.origin;
+      preconnectLink.crossOrigin = 'anonymous';
+      document.head.appendChild(preconnectLink);
+    } catch {}
+
+    // Safety timer to clear loading spinner
+    const safetyTimer = setTimeout(() => {
+      setIsVideoLoading(false);
+    }, 14000);
+
+    // Automatic retry once for FileMoon (server2) and VDOHide (server3) if slow
+    let slowTimer: NodeJS.Timeout | null = null;
+    if (effectiveServer === 'server2' || effectiveServer === 'server3') {
+      const serverKey = `${episode?.id || paramId}_${effectiveServer}`;
+      slowTimer = setTimeout(() => {
+        if (!retriedServersRef.current[serverKey]) {
+          retriedServersRef.current[serverKey] = true;
+          console.warn(`[Video Player] ${effectiveServer === 'server2' ? 'FileMoon' : 'VDOHide'} is slow, automatically retrying once...`);
+          setRetryCount(prev => prev + 1);
+        } else {
+          setServerSlowError(`${effectiveServer === 'server2' ? 'FileMoon' : 'VDOHide'} is responding slowly.`);
+          setIsVideoLoading(false);
+        }
+      }, 7000);
+    }
+
+    return () => {
+      clearTimeout(safetyTimer);
+      if (slowTimer) clearTimeout(slowTimer);
+    };
+  }, [effectiveServer, activeStreamUrl, episode?.id, paramId]);
 
   const handleSelectServer = (server: 'server1' | 'server2' | 'server3') => {
     if (effectiveServer !== server) {
       setSelectedServer(server);
       setIsVideoLoading(true);
+      setServerSlowError(null);
       const epId = episode?.id || paramId;
       if (epId) {
         try {
@@ -429,9 +493,34 @@ export default function WatchPage() {
 
              {/* Player Container (Server 1 Abyss / Server 2 FileMoon / Server 3 VDOHide / Direct Video Player) */}
              <div className="w-full aspect-video relative rounded-2xl overflow-hidden border border-brand shadow-[0_0_20px_rgba(0,229,255,0.3)] bg-black">
+                {/* Loading Spinner - Requirement 9: Show loading spinner until the player is ready */}
                 {isVideoLoading && activeStreamUrl && (
-                  <div className="absolute inset-0 z-0 flex items-center justify-center bg-black/80 pointer-events-none">
-                     <div className="w-12 h-12 border-4 border-white/10 border-t-brand rounded-full animate-spin"></div>
+                  <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-[2px] pointer-events-none transition-opacity duration-300">
+                    <div className="w-12 h-12 border-4 border-white/10 border-t-brand rounded-full animate-spin"></div>
+                    <p className="text-white/60 text-xs mt-3 font-medium tracking-wide">
+                      {retryCount > 0 ? 'Retrying streaming server...' : 'Buffering player...'}
+                    </p>
+                  </div>
+                )}
+
+                {/* Requirement 10: Automatic retry message or fallback prompt if slow */}
+                {serverSlowError && !isVideoLoading && (
+                  <div className="absolute top-3 left-3 right-3 z-30 bg-amber-950/80 border border-amber-500/40 rounded-xl p-3 flex items-center justify-between backdrop-blur-md">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span className="text-amber-200 text-xs font-medium">{serverSlowError}</span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setRetryCount(prev => prev + 1);
+                        setIsVideoLoading(true);
+                        setServerSlowError(null);
+                      }}
+                      className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      Retry Server
+                    </button>
                   </div>
                 )}
 
@@ -448,24 +537,32 @@ export default function WatchPage() {
                         </p>
                     </div>
                 ) : isDirectVideo(activeStreamUrl) ? (
+                  /* Requirement 9: Do not recreate player when switching episodes. Preload metadata */
                   <video 
-                    key={`${effectiveServer}-${activeStreamUrl}`}
+                    key="zk-stream-video"
                     src={activeStreamUrl}
                     controls
                     autoPlay
                     playsInline
+                    preload="metadata"
                     className="w-full h-full object-contain bg-black relative z-10"
-                    onLoadedData={() => setIsVideoLoading(false)}
+                    onLoadedMetadata={() => setIsVideoLoading(false)}
+                    onCanPlay={() => setIsVideoLoading(false)}
                     onError={() => setIsVideoLoading(false)}
                   />
                 ) : (
+                  /* Requirement 9: Persistent iframe - do not recreate DOM node when switching episodes */
                   <iframe 
-                    key={`${effectiveServer}-${activeStreamUrl}`}
+                    ref={iframeRef}
+                    key="zk-stream-iframe"
                     src={activeStreamUrl}
                     className="w-full h-full border-0 absolute top-0 left-0 z-10"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
                     allowFullScreen
-                    onLoad={() => setIsVideoLoading(false)}
+                    onLoad={() => {
+                      setIsVideoLoading(false);
+                      setServerSlowError(null);
+                    }}
                   />
                 )}
              </div>

@@ -262,8 +262,8 @@ export function normalizeAnime(item: any, id?: string): AnimeItem {
     item.isMovie
   );
 
-  const poster = (item.poster_url || item.posterUrl || '').trim();
-  const banner = (item.banner_url || item.bannerUrl || poster).trim();
+  const poster = resolveImageUrl(item.poster_url || item.posterUrl || '');
+  const banner = resolveImageUrl(item.banner_url || item.bannerUrl || poster);
 
   return {
     ...item,
@@ -322,9 +322,9 @@ export function normalizeEpisodeDoc(
   const fallbackAnimeId = typeof animeIdFallbackOrJoinedAnime === 'string' ? animeIdFallbackOrJoinedAnime : '';
 
   const animeTitle = animeObj?.title || data.anime_title || data.animeTitle || '';
-  const rawAnimePoster = (animeObj?.poster_url || animeObj?.posterUrl || data.poster_url || data.posterUrl || '').trim();
-  const rawAnimeBanner = (animeObj?.banner_url || animeObj?.bannerUrl || data.banner_url || data.bannerUrl || rawAnimePoster).trim();
-  const rawEpThumb = (data.thumbnail_url || data.thumbnailUrl || rawAnimePoster).trim();
+  const rawAnimePoster = resolveImageUrl(animeObj?.poster_url || animeObj?.posterUrl || data.poster_url || data.posterUrl || '');
+  const rawAnimeBanner = resolveImageUrl(animeObj?.banner_url || animeObj?.bannerUrl || data.banner_url || data.bannerUrl || rawAnimePoster);
+  const rawEpThumb = resolveImageUrl(data.thumbnail_url || data.thumbnailUrl || rawAnimePoster);
 
   const animePoster = rawAnimePoster || rawEpThumb;
   const animeBanner = rawAnimeBanner || animePoster;
@@ -525,6 +525,165 @@ export async function refreshSupabaseSchemaCache(): Promise<{ success: boolean; 
 // -------------------------------------------------------------
 // READ OPERATIONS (SUPABASE ONLY - ALL READ FROM DETECTED TABLE)
 // -------------------------------------------------------------
+
+export interface UnifiedCatalog {
+  allAnime: AnimeItem[];
+  featuredAnime: AnimeItem[];
+  trendingAnime: AnimeItem[];
+  newDrops: EpisodeItem[];
+  allSeasons: SeasonItem[];
+  allEpisodes: EpisodeItem[];
+}
+
+/**
+ * Preload only the first 6 home page images (Requirement 7)
+ */
+export function preloadFirst6HomeImages(catalog: UnifiedCatalog) {
+  if (typeof window === 'undefined') return;
+
+  const urls: string[] = [];
+  
+  // 1. Featured hero images (first 2)
+  if (catalog.featuredAnime.length > 0) {
+    catalog.featuredAnime.slice(0, 2).forEach(a => {
+      const url = a.banner_url || a.poster_url;
+      if (url && !urls.includes(url)) urls.push(url);
+    });
+  }
+
+  // 2. New drops / trending posters to fill up to 6 images
+  const pool = [...catalog.trendingAnime, ...catalog.allAnime];
+  for (const a of pool) {
+    if (urls.length >= 6) break;
+    const url = a.poster_url || a.banner_url;
+    if (url && !urls.includes(url)) urls.push(url);
+  }
+
+  // Preload only the first 6
+  urls.slice(0, 6).forEach(url => {
+    try {
+      const link = document.createElement('link');
+      link.rel = 'preload';
+      link.as = 'image';
+      link.href = url;
+      document.head.appendChild(link);
+    } catch {}
+  });
+}
+
+/**
+ * Requirement 5: Reduce database requests.
+ * Load anime, seasons and episodes using a SINGLE optimized query instead of multiple requests.
+ * Requirement 6: Cache API responses for 5 minutes.
+ */
+export async function getUnifiedCatalog(): Promise<UnifiedCatalog> {
+  const cacheKey = 'unified_app_catalog';
+  const cached = getCachedData<UnifiedCatalog>(cacheKey);
+  if (cached && cached.allAnime && cached.allAnime.length > 0) {
+    return cached;
+  }
+
+  try {
+    const res = await executeSupabaseWithRetry(async () => {
+      return await supabase
+        .from('anime')
+        .select('*, seasons(*), episodes(*)')
+        .order('created_at', { ascending: false });
+    });
+
+    if (res?.error) {
+      console.error('[Supabase Real Error - getUnifiedCatalog]:', formatDbError(res.error));
+      throw new Error(formatDbError(res.error));
+    }
+
+    const data = res?.data || [];
+    const allAnime: AnimeItem[] = [];
+    const allSeasons: SeasonItem[] = [];
+    const allEpisodes: EpisodeItem[] = [];
+
+    data.forEach((rawAnime: any) => {
+      const animeItem = normalizeAnime(rawAnime);
+      allAnime.push(animeItem);
+
+      if (Array.isArray(rawAnime.seasons)) {
+        rawAnime.seasons.forEach((rawSeason: any) => {
+          allSeasons.push({
+            ...rawSeason,
+            id: String(rawSeason.id),
+            animeId: String(animeItem.id),
+            seasonNumber: Number(rawSeason.season_number || rawSeason.seasonNumber || 1),
+            title: rawSeason.title || `Season ${rawSeason.season_number || 1}`,
+            bannerUrl: resolveImageUrl(rawSeason.banner_url || rawSeason.bannerUrl || animeItem.banner_url || ''),
+            banner_url: resolveImageUrl(rawSeason.banner_url || rawSeason.bannerUrl || animeItem.banner_url || ''),
+            posterUrl: resolveImageUrl(rawSeason.poster_url || rawSeason.posterUrl || animeItem.poster_url || ''),
+            poster_url: resolveImageUrl(rawSeason.poster_url || rawSeason.posterUrl || animeItem.poster_url || ''),
+            order: Number(rawSeason.order ?? (rawSeason.season_number || 1)),
+          });
+        });
+      }
+
+      if (Array.isArray(rawAnime.episodes)) {
+        rawAnime.episodes.forEach((rawEp: any) => {
+          const matchedSeason = Array.isArray(rawAnime.seasons)
+            ? rawAnime.seasons.find((s: any) => s.id === rawEp.season_id)
+            : null;
+          const normalizedEp = normalizeEpisodeDoc(rawEp.id, rawEp, animeItem, matchedSeason);
+          allEpisodes.push(normalizedEp);
+        });
+      }
+    });
+
+    // Extract featured
+    let feat = allAnime.filter(a => a.featured);
+    if (feat.length === 0 && allAnime.length > 0) {
+      feat = allAnime.slice(0, 6);
+    }
+
+    // Extract trending
+    let trend = allAnime.filter(a => a.trending);
+    if (trend.length === 0 && allAnime.length > 0) {
+      trend = [...allAnime].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 10);
+    }
+
+    // Extract new drops (sorted by created_at desc)
+    const newDrops = [...allEpisodes]
+      .filter(ep => ep.published !== false)
+      .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+      .slice(0, 40);
+
+    const catalog: UnifiedCatalog = {
+      allAnime,
+      featuredAnime: feat,
+      trendingAnime: trend,
+      newDrops,
+      allSeasons,
+      allEpisodes,
+    };
+
+    // Cache the whole catalog for 5 minutes (Requirement 6)
+    setCachedData(cacheKey, catalog);
+    // Also warm individual cache keys for instant hits across other components
+    setCachedData('all_anime', allAnime);
+    setCachedData('featured_anime', feat);
+    setCachedData('trending_anime', trend);
+    setCachedData('new_drops', newDrops);
+    setCachedData('all_seasons', allSeasons);
+    setCachedData('all_episodes', allEpisodes);
+
+    return catalog;
+  } catch (err: any) {
+    console.error('[Supabase Real Error - getUnifiedCatalog exception]:', formatDbError(err));
+    if (cached) return cached;
+    return {
+      allAnime: [],
+      featuredAnime: [],
+      trendingAnime: [],
+      newDrops: [],
+      allSeasons: [],
+      allEpisodes: [],
+    };
+  }
+}
 
 // 1. Featured Anime (Supabase Only - Requirement 7)
 export async function getFeaturedAnime(): Promise<AnimeItem[]> {
@@ -774,6 +933,124 @@ export async function getAnimeById(id: string): Promise<AnimeItem | null> {
   }
 }
 
+/**
+ * Requirement 5: Reduce database requests.
+ * Load anime, seasons and episodes using a SINGLE optimized query instead of multiple requests.
+ * Requirement 6: Cache API responses for 5 minutes.
+ */
+export async function getAnimeFullDetails(id: string): Promise<{
+  anime: AnimeItem | null;
+  seasons: SeasonItem[];
+  episodes: EpisodeItem[];
+}> {
+  if (!id) return { anime: null, seasons: [], episodes: [] };
+
+  const cacheKey = `anime_full_${id}`;
+  const cached = getCachedData<{
+    anime: AnimeItem;
+    seasons: SeasonItem[];
+    episodes: EpisodeItem[];
+  }>(cacheKey);
+
+  if (cached && cached.anime) {
+    return cached;
+  }
+
+  try {
+    const res = await executeSupabaseWithRetry(async () => {
+      return await supabase
+        .from('anime')
+        .select('*, seasons(*), episodes(*)')
+        .eq('id', id)
+        .maybeSingle();
+    });
+
+    let raw = res?.data;
+    if (!raw) {
+      const titleRes = await executeSupabaseWithRetry(async () => {
+        return await supabase
+          .from('anime')
+          .select('*, seasons(*), episodes(*)')
+          .ilike('title', id)
+          .maybeSingle();
+      });
+      raw = titleRes?.data;
+    }
+
+    if (raw) {
+      const anime = normalizeAnime(raw);
+      const rawSeasons: any[] = Array.isArray(raw.seasons) ? raw.seasons : [];
+      const rawEpisodes: any[] = Array.isArray(raw.episodes) ? raw.episodes : [];
+
+      let seasons: SeasonItem[] = rawSeasons
+        .map((s: any) => ({
+          ...s,
+          id: String(s.id),
+          animeId: String(anime.id),
+          seasonNumber: Number(s.season_number || s.seasonNumber || 1),
+          title: s.title || `Season ${s.season_number || 1}`,
+          bannerUrl: resolveImageUrl(s.banner_url || s.bannerUrl || anime.banner_url || ''),
+          banner_url: resolveImageUrl(s.banner_url || s.bannerUrl || anime.banner_url || ''),
+          posterUrl: resolveImageUrl(s.poster_url || s.posterUrl || anime.poster_url || ''),
+          poster_url: resolveImageUrl(s.poster_url || s.posterUrl || anime.poster_url || ''),
+          order: Number(s.order ?? (s.season_number || 1)),
+        }))
+        .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+      if (seasons.length === 0 && rawEpisodes.length > 0) {
+        seasons = [
+          {
+            id: 's1',
+            animeId: anime.id,
+            seasonNumber: 1,
+            title: 'Season 1',
+            order: 1,
+          },
+        ];
+      }
+
+      const episodes: EpisodeItem[] = rawEpisodes
+        .filter((ep: any) => ep.published !== false)
+        .map((ep: any) => {
+          const matchedSeason = seasons.find((s) => s.id === ep.season_id);
+          return normalizeEpisodeDoc(ep.id, ep, anime, matchedSeason);
+        })
+        .sort((a, b) => Number(a.episodeNumber || 0) - Number(b.episodeNumber || 0));
+
+      const payload = { anime, seasons, episodes };
+      setCachedData(cacheKey, payload);
+      setCachedData(`anime_${anime.id}`, anime);
+      setCachedData(`seasons_${anime.id}`, seasons);
+      setCachedData(`episodes_${anime.id}`, episodes);
+
+      return payload;
+    }
+  } catch (err: any) {
+    console.error(`[Supabase Real Error - getAnimeFullDetails(${id})]:`, formatDbError(err));
+  }
+
+  // Resilient fallback: Parallel fetch if nested join returned empty
+  try {
+    const [animeData, seasonsData, episodesData] = await Promise.all([
+      getAnimeById(id),
+      getSeasonsByAnimeId(id),
+      getEpisodesByAnimeId(id),
+    ]);
+
+    const fallbackPayload = {
+      anime: animeData,
+      seasons: seasonsData || [],
+      episodes: episodesData || [],
+    };
+    if (fallbackPayload.anime) {
+      setCachedData(cacheKey, fallbackPayload);
+    }
+    return fallbackPayload;
+  } catch {
+    return { anime: null, seasons: [], episodes: [] };
+  }
+}
+
 // 5. Get Seasons by Anime ID (Supabase Only - Requirement 7)
 export async function getSeasonsByAnimeId(animeId: string): Promise<SeasonItem[]> {
   if (!animeId) return [];
@@ -798,8 +1075,10 @@ export async function getSeasonsByAnimeId(animeId: string): Promise<SeasonItem[]
         animeId: String(item.anime_id || item.animeId || animeId),
         seasonNumber: Number(item.season_number || item.seasonNumber || 1),
         title: item.title || `Season ${item.season_number || 1}`,
-        bannerUrl: item.banner_url || item.bannerUrl,
-        posterUrl: item.poster_url || item.posterUrl,
+        bannerUrl: resolveImageUrl(item.banner_url || item.bannerUrl),
+        banner_url: resolveImageUrl(item.banner_url || item.bannerUrl),
+        posterUrl: resolveImageUrl(item.poster_url || item.posterUrl),
+        poster_url: resolveImageUrl(item.poster_url || item.posterUrl),
         order: Number(item.order ?? (item.season_number || 1)),
       }));
       setCachedData(cacheKey, mapped);
