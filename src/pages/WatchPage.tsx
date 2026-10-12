@@ -8,6 +8,7 @@ import {
   getSeasonsByAnimeId, 
   getEpisodesByAnimeId, 
   resolveEpisodeServers, 
+  isValidStreamUrl,
   saveUserProgress, 
   getActiveEpisodesTable, 
   getActiveAnimeTable 
@@ -53,9 +54,10 @@ export default function WatchPage() {
   const [error, setError] = useState<string | null>(null);
   const [isVideoLoading, setIsVideoLoading] = useState(true);
   const [selectedServer, setSelectedServer] = useState<'server1' | 'server2' | 'server3'>('server1');
-  const [serverSlowError, setServerSlowError] = useState<string | null>(null);
+  const [deadServers, setDeadServers] = useState<Set<'server1' | 'server2' | 'server3'>>(new Set());
+  const [switchNotice, setSwitchNotice] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState<number>(0);
-  const retriedServersRef = useRef<Record<string, boolean>>({});
+  const isCurrentServerLoadedRef = useRef<boolean>(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const navigate = useNavigate();
@@ -295,49 +297,68 @@ export default function WatchPage() {
   }, [paramId, paramAnimeId, paramSeasonId]);
 
   // Streaming Sources: Server 1 (Abyss), Server 2 (FileMoon), Server 3 (VDOHide)
-  const { server1: server1Url, server2: server2Url, server3: server3Url } = resolveEpisodeServers(episode);
+  const { server1: rawServer1, server2: rawServer2, server3: rawServer3 } = resolveEpisodeServers(episode);
+  const server1Url = isValidStreamUrl(rawServer1) ? rawServer1 : '';
+  const server2Url = isValidStreamUrl(rawServer2) ? rawServer2 : '';
+  const server3Url = isValidStreamUrl(rawServer3) ? rawServer3 : '';
 
-  const hasServer1 = Boolean(server1Url);
-  const hasServer2 = Boolean(server2Url);
-  const hasServer3 = Boolean(server3Url);
-  const hasAnyServer = hasServer1 || hasServer2 || hasServer3;
+  const activeEpId = episode?.id || paramId;
 
-  // Priority order: Abyss (Server 1) -> FileMoon (Server 2) -> VDOHide (Server 3)
-  // If Abyss URL exists, load it first.
-  // If not, automatically use FileMoon.
-  // If FileMoon is empty, automatically use VDOHide.
-  let effectiveServer: 'server1' | 'server2' | 'server3' = 'server1';
-  if (hasServer1) {
-    effectiveServer = (selectedServer === 'server2' && hasServer2) ? 'server2'
-                    : (selectedServer === 'server3' && hasServer3) ? 'server3'
-                    : 'server1';
-  } else if (hasServer2) {
-    effectiveServer = (selectedServer === 'server3' && hasServer3) ? 'server3' : 'server2';
-  } else if (hasServer3) {
-    effectiveServer = 'server3';
-  }
-
-  // Keep the selected server alive while switching episodes (Requirement 5)
+  // Restore dead servers for this episode from sessionStorage (Requirement 1 & 7)
   useEffect(() => {
-    if (!episode) return;
-    const preferred = (localStorage.getItem('zk_preferred_server') as any) || selectedServer;
+    if (!activeEpId) return;
+    try {
+      const saved = sessionStorage.getItem(`zk_dead_servers_${activeEpId}`);
+      if (saved) {
+        const arr = JSON.parse(saved);
+        if (Array.isArray(arr)) {
+          setDeadServers(new Set(arr));
+          return;
+        }
+      }
+    } catch {}
+    setDeadServers(new Set());
+    setSwitchNotice(null);
+  }, [activeEpId]);
 
-    if (preferred === 'server2' && hasServer2) {
-      setSelectedServer('server2');
-    } else if (preferred === 'server3' && hasServer3) {
-      setSelectedServer('server3');
-    } else if (preferred === 'server1' && hasServer1) {
-      setSelectedServer('server1');
-    } else if (hasServer1) {
-      setSelectedServer('server1');
-    } else if (hasServer2) {
-      setSelectedServer('server2');
-    } else if (hasServer3) {
-      setSelectedServer('server3');
+  // Requirement 4: Show only servers that actually have a valid video URL
+  const validServers = useMemo(() => {
+    const list: ('server1' | 'server2' | 'server3')[] = [];
+    if (server1Url) list.push('server1');
+    if (server2Url) list.push('server2');
+    if (server3Url) list.push('server3');
+    return list;
+  }, [server1Url, server2Url, server3Url]);
+
+  // Requirement 1 & 7: Filter out dead/broken/expired servers
+  const aliveServers = useMemo(() => {
+    return validServers.filter(s => !deadServers.has(s));
+  }, [validServers, deadServers]);
+
+  // Priority order: Server 1 -> Server 2 -> Server 3
+  const effectiveServer: ('server1' | 'server2' | 'server3') | null = useMemo(() => {
+    if (aliveServers.length === 0) return null;
+    if (aliveServers.includes(selectedServer)) {
+      return selectedServer;
     }
-  }, [episode?.id, paramId, hasServer1, hasServer2, hasServer3]);
+    return aliveServers[0];
+  }, [aliveServers, selectedServer]);
+
+  // Keep preferred server alive while switching episodes if alive
+  useEffect(() => {
+    if (!episode || aliveServers.length === 0) return;
+    try {
+      const preferred = localStorage.getItem('zk_preferred_server') as any;
+      if (preferred && aliveServers.includes(preferred)) {
+        setSelectedServer(preferred);
+      } else if (!aliveServers.includes(selectedServer)) {
+        setSelectedServer(aliveServers[0]);
+      }
+    } catch {}
+  }, [episode?.id, activeEpId, aliveServers]);
 
   const activeStreamUrl = useMemo(() => {
+    if (!effectiveServer) return '';
     let url = effectiveServer === 'server1' ? server1Url :
               effectiveServer === 'server2' ? server2Url :
               effectiveServer === 'server3' ? server3Url : '';
@@ -348,68 +369,157 @@ export default function WatchPage() {
     return url;
   }, [effectiveServer, server1Url, server2Url, server3Url, retryCount]);
 
-  // Reset retry state when episode or server changes
-  useEffect(() => {
-    setRetryCount(0);
-    setServerSlowError(null);
-  }, [episode?.id, paramId, effectiveServer]);
+  // Requirement 1, 2, 5, 6, 7: Automatic Failover when a server times out (8s), 403, 404, or fails
+  const handleServerFailure = useCallback((failedServer: 'server1' | 'server2' | 'server3', reason?: string) => {
+    console.warn(`[Video Player] ${failedServer} failed (${reason || 'unreachable'}). Switching to next available server...`);
 
-  // Requirement 5: Improve player performance, preload metadata, auto-retry once
+    setDeadServers(prev => {
+      if (prev.has(failedServer)) return prev;
+      const nextSet = new Set(prev);
+      nextSet.add(failedServer);
+
+      if (activeEpId) {
+        try {
+          sessionStorage.setItem(`zk_dead_servers_${activeEpId}`, JSON.stringify(Array.from(nextSet)));
+        } catch {}
+      }
+
+      // Check remaining valid servers
+      const remaining = validServers.filter(s => !nextSet.has(s));
+      if (remaining.length > 0) {
+        const nextCandidate = remaining[0];
+        const failedName = failedServer === 'server1' ? 'Server 1' : failedServer === 'server2' ? 'Server 2' : 'Server 3';
+        const nextName = nextCandidate === 'server1' ? 'Server 1' : nextCandidate === 'server2' ? 'Server 2' : 'Server 3';
+        setSwitchNotice(`${failedName} did not respond. Automatically playing ${nextName}...`);
+        setSelectedServer(nextCandidate);
+        setIsVideoLoading(true);
+        isCurrentServerLoadedRef.current = false;
+        setRetryCount(0);
+        setTimeout(() => setSwitchNotice(null), 6000);
+      } else {
+        // Requirement 10: Show a proper error only if every server fails
+        setIsVideoLoading(false);
+        setSwitchNotice(null);
+      }
+
+      return nextSet;
+    });
+  }, [activeEpId, validServers]);
+
+  const handleRetryAll = () => {
+    if (activeEpId) {
+      try {
+        sessionStorage.removeItem(`zk_dead_servers_${activeEpId}`);
+      } catch {}
+    }
+    setDeadServers(new Set());
+    if (validServers.length > 0) {
+      setSelectedServer(validServers[0]);
+    }
+    isCurrentServerLoadedRef.current = false;
+    setRetryCount(prev => prev + 1);
+    setIsVideoLoading(true);
+    setSwitchNotice(null);
+  };
+
+  // Requirement 8: Preload player and video metadata / preconnect DNS for buffering
   useEffect(() => {
-    if (!activeStreamUrl) {
+    const urls = [server1Url, server2Url, server3Url].filter(Boolean);
+    urls.forEach(u => {
+      try {
+        const origin = new URL(u).origin;
+        if (!document.querySelector(`link[rel="dns-prefetch"][href="${origin}"]`)) {
+          const l1 = document.createElement('link');
+          l1.rel = 'dns-prefetch';
+          l1.href = origin;
+          document.head.appendChild(l1);
+        }
+        if (!document.querySelector(`link[rel="preconnect"][href="${origin}"]`)) {
+          const l2 = document.createElement('link');
+          l2.rel = 'preconnect';
+          l2.href = origin;
+          l2.crossOrigin = 'anonymous';
+          document.head.appendChild(l2);
+        }
+      } catch {}
+    });
+  }, [server1Url, server2Url, server3Url]);
+
+  // Requirement 2, 3, 9: Watchdog timer for timeout / 403 / 404 / no response within 8s
+  useEffect(() => {
+    if (!effectiveServer || !activeStreamUrl) {
       setIsVideoLoading(false);
       return;
     }
 
     setIsVideoLoading(true);
-    setServerSlowError(null);
+    isCurrentServerLoadedRef.current = false;
 
-    // Preconnect to stream host
-    try {
-      const parsed = new URL(activeStreamUrl);
-      const preconnectLink = document.createElement('link');
-      preconnectLink.rel = 'preconnect';
-      preconnectLink.href = parsed.origin;
-      preconnectLink.crossOrigin = 'anonymous';
-      document.head.appendChild(preconnectLink);
-    } catch {}
+    let isMounted = true;
+    const currentServer = effectiveServer;
 
-    // Safety timer to clear loading spinner
-    const safetyTimer = setTimeout(() => {
-      setIsVideoLoading(false);
-    }, 18000);
-
-    // Requirement 5: Retry once automatically before showing "responding slowly"
-    let slowTimer: NodeJS.Timeout | null = null;
-    if (effectiveServer === 'server2' || effectiveServer === 'server3') {
-      const serverKey = `${episode?.id || paramId}_${effectiveServer}`;
-      slowTimer = setTimeout(() => {
-        if (!retriedServersRef.current[serverKey]) {
-          retriedServersRef.current[serverKey] = true;
-          console.warn(`[Video Player] ${effectiveServer === 'server2' ? 'FileMoon' : 'VDOHide'} taking longer, automatically retrying once...`);
-          setRetryCount(prev => prev + 1);
-        } else {
-          setServerSlowError(`${effectiveServer === 'server2' ? 'FileMoon' : 'VDOHide'} is taking longer to respond.`);
-          setIsVideoLoading(false);
+    // Fast check for 403 / 404 via HEAD request
+    const abortCtrl = new AbortController();
+    const probe = async () => {
+      try {
+        const res = await fetch(activeStreamUrl, {
+          method: 'HEAD',
+          signal: abortCtrl.signal,
+          headers: isDirectVideo(activeStreamUrl) ? { Range: 'bytes=0-0' } : {}
+        });
+        if (!isMounted) return;
+        if (res.status === 403 || res.status === 404 || res.status === 410) {
+          console.warn(`[Video Player] ${currentServer} returned ${res.status}. Failing server immediately.`);
+          handleServerFailure(currentServer, `HTTP ${res.status}`);
         }
-      }, 14000);
+      } catch {}
+    };
+    probe();
+
+    // Requirement 2: 8 seconds timeout - if server returns timeout or no response within 8s, switch automatically
+    const timer8s = setTimeout(() => {
+      if (isMounted && !isCurrentServerLoadedRef.current) {
+        console.warn(`[Video Player] ${currentServer} has not responded within 8 seconds.`);
+        handleServerFailure(currentServer, 'Timeout after 8 seconds');
+      }
+    }, 8000);
+
+    // Requirement 9: 10-second timeout for embeds
+    let embedTimer10s: NodeJS.Timeout | null = null;
+    if (!isDirectVideo(activeStreamUrl)) {
+      embedTimer10s = setTimeout(() => {
+        if (isMounted && !isCurrentServerLoadedRef.current) {
+          console.warn(`[Video Player] Embed ${currentServer} timed out after 10 seconds.`);
+          handleServerFailure(currentServer, 'Embed timed out after 10 seconds');
+        }
+      }, 10000);
     }
 
+    // Requirement 3: Never keep showing "Initializing Player" forever (11s max hard cutoff)
+    const maxSafetyTimer = setTimeout(() => {
+      if (isMounted) {
+        setIsVideoLoading(false);
+      }
+    }, 11000);
+
     return () => {
-      clearTimeout(safetyTimer);
-      if (slowTimer) clearTimeout(slowTimer);
+      isMounted = false;
+      abortCtrl.abort();
+      clearTimeout(timer8s);
+      if (embedTimer10s) clearTimeout(embedTimer10s);
+      clearTimeout(maxSafetyTimer);
     };
-  }, [effectiveServer, activeStreamUrl, episode?.id, paramId]);
+  }, [effectiveServer, activeStreamUrl, handleServerFailure]);
 
   const handleSelectServer = (server: 'server1' | 'server2' | 'server3') => {
-    if (effectiveServer !== server) {
+    if (effectiveServer !== server && aliveServers.includes(server)) {
       setSelectedServer(server);
+      isCurrentServerLoadedRef.current = false;
       setIsVideoLoading(true);
-      setServerSlowError(null);
-      const epId = episode?.id || paramId;
-      if (epId) {
+      setSwitchNotice(null);
+      if (activeEpId) {
         try {
-          localStorage.setItem(`zk_selected_server_${epId}`, server);
+          localStorage.setItem(`zk_selected_server_${activeEpId}`, server);
           localStorage.setItem('zk_preferred_server', server);
         } catch {}
       }
@@ -491,8 +601,18 @@ export default function WatchPage() {
 
              {/* Player Container (Server 1 Abyss / Server 2 FileMoon / Server 3 VDOHide / Direct Video Player) */}
              <div className="w-full aspect-video relative rounded-2xl overflow-hidden border border-brand shadow-[0_0_20px_rgba(0,229,255,0.3)] bg-black">
-                {/* Proper Loading Spinner while player initializes (Requirement 6) */}
-                {isVideoLoading && activeStreamUrl && (
+                {/* Switch Notification Banner */}
+                {switchNotice && (
+                  <div className="absolute top-3 left-3 right-3 z-30 bg-[#0c1824]/95 border border-brand/50 rounded-xl px-4 py-2.5 flex items-center justify-between backdrop-blur-md shadow-[0_0_20px_rgba(0,229,255,0.25)] animate-in fade-in duration-200">
+                    <div className="flex items-center gap-2.5">
+                      <RotateCcw className="w-4 h-4 text-brand animate-spin shrink-0" />
+                      <span className="text-cyan-200 text-xs font-semibold">{switchNotice}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Loading Spinner while player initializes or switches (Requirements 3 & 6) */}
+                {isVideoLoading && activeStreamUrl && aliveServers.length > 0 && (
                   <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/85 backdrop-blur-[4px] pointer-events-none transition-opacity duration-300">
                     <div className="relative flex items-center justify-center">
                       <div className="w-16 h-16 border-4 border-white/10 border-t-[#00e5ff] rounded-full animate-spin"></div>
@@ -501,7 +621,7 @@ export default function WatchPage() {
                       </div>
                     </div>
                     <p className="text-white text-sm mt-4 font-bold tracking-wide">
-                      {retryCount > 0 ? 'Retrying Stream Server...' : 'Initializing Player...'}
+                      {switchNotice ? 'Switching Server...' : retryCount > 0 ? 'Retrying Stream Server...' : 'Initializing Player...'}
                     </p>
                     <div className="flex items-center gap-2 mt-1.5">
                       <span className="w-2 h-2 rounded-full bg-[#00e5ff] animate-ping"></span>
@@ -512,72 +632,103 @@ export default function WatchPage() {
                   </div>
                 )}
 
-                {/* Requirement 10: Automatic retry message or fallback prompt if slow */}
-                {serverSlowError && !isVideoLoading && (
-                  <div className="absolute top-3 left-3 right-3 z-30 bg-amber-950/80 border border-amber-500/40 rounded-xl p-3 flex items-center justify-between backdrop-blur-md">
-                    <div className="flex items-center gap-2">
-                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                      <span className="text-amber-200 text-xs font-medium">{serverSlowError}</span>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setRetryCount(prev => prev + 1);
-                        setIsVideoLoading(true);
-                        setServerSlowError(null);
-                      }}
-                      className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <RotateCcw className="w-3 h-3" />
-                      Retry Server
-                    </button>
-                  </div>
-                )}
-
-                {!activeStreamUrl ? (
-                    <div className="w-full h-full flex flex-col items-center justify-center bg-black/90 p-6 text-center">
-                        <div className="w-14 h-14 rounded-2xl bg-brand/10 border border-brand/30 flex items-center justify-center text-brand mb-3 shadow-[0_0_20px_rgba(0,229,255,0.25)]">
-                          <Play className="w-6 h-6 ml-0.5 opacity-40" />
+                {/* Requirement 10: Show a proper error ONLY if every server fails (or if no valid URL exists) */}
+                {(!activeStreamUrl || aliveServers.length === 0) ? (
+                    <div className="w-full h-full flex flex-col items-center justify-center bg-black/95 p-6 text-center">
+                        <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 mb-4 shadow-[0_0_25px_rgba(239,68,68,0.25)]">
+                          <AlertCircle className="w-8 h-8" />
                         </div>
-                        <p className="text-white text-lg font-bold">
-                          No streaming source available
+                        <p className="text-white text-lg sm:text-xl font-bold mb-1">
+                          {validServers.length === 0 ? 'No Streaming Sources Available' : 'All Streaming Servers Unavailable'}
                         </p>
-                        <p className="text-white/50 text-xs mt-1 max-w-sm">
-                          This episode does not have any streaming server URLs configured yet.
+                        <p className="text-white/60 text-xs sm:text-sm max-w-md mb-6 leading-relaxed">
+                          {validServers.length === 0
+                            ? 'This episode does not have any streaming server URLs configured yet.'
+                            : `We tried connecting to all available video servers (${validServers.map(s => s === 'server1' ? 'Server 1 (Abyss)' : s === 'server2' ? 'Server 2 (FileMoon)' : 'Server 3 (VDOHide)').join(', ')}), but none responded within the time limit.`}
                         </p>
+                        <div className="flex flex-wrap items-center justify-center gap-3">
+                          {validServers.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={handleRetryAll}
+                              className="px-5 py-2.5 rounded-xl bg-brand text-black font-bold text-xs hover:brightness-110 flex items-center gap-2 transition-all cursor-pointer shadow-[0_0_15px_rgba(0,229,255,0.4)]"
+                            >
+                              <RotateCcw className="w-4 h-4" />
+                              Retry All Servers
+                            </button>
+                          )}
+                          {nextEpisode && (
+                            <Link
+                              to={`/watch/${nextEpisode.id || (nextEpisode as any)._id}`}
+                              className="px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center gap-2 transition-all border border-white/10"
+                            >
+                              <SkipForward className="w-4 h-4" />
+                              Next Episode
+                            </Link>
+                          )}
+                          <Link
+                            to={anime ? `/anime/${anime.id}` : '/'}
+                            className="px-5 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/70 hover:text-white font-medium text-xs transition-all border border-white/5"
+                          >
+                            Back to Details
+                          </Link>
+                        </div>
                     </div>
                 ) : isDirectVideo(activeStreamUrl) ? (
-                  /* Requirement 9: Do not recreate player when switching episodes. Preload metadata */
+                  /* Requirement 8: Preload player and video metadata */
                   <video 
                     key="zk-stream-video"
                     src={activeStreamUrl}
                     controls
                     autoPlay
                     playsInline
-                    preload="metadata"
+                    preload="auto"
                     className="w-full h-full object-contain bg-black relative z-10"
-                    onLoadedMetadata={() => setIsVideoLoading(false)}
-                    onCanPlay={() => setIsVideoLoading(false)}
-                    onError={() => setIsVideoLoading(false)}
+                    onLoadedMetadata={() => {
+                      isCurrentServerLoadedRef.current = true;
+                      setIsVideoLoading(false);
+                    }}
+                    onCanPlay={() => {
+                      isCurrentServerLoadedRef.current = true;
+                      setIsVideoLoading(false);
+                    }}
+                    onPlaying={() => {
+                      isCurrentServerLoadedRef.current = true;
+                      setIsVideoLoading(false);
+                    }}
+                    onError={(e) => {
+                      console.error('[Video Player] Direct video playback error:', e);
+                      if (effectiveServer) {
+                        handleServerFailure(effectiveServer, 'Direct video error or 403/404');
+                      }
+                    }}
                   />
                 ) : (
-                  /* Requirement 9: Persistent iframe - do not recreate DOM node when switching episodes */
+                  /* Requirement 8 & 9: Persistent iframe with eager loading and 10s timeout */
                   <iframe 
                     ref={iframeRef}
                     key="zk-stream-iframe"
                     src={activeStreamUrl}
+                    loading="eager"
                     className="w-full h-full border-0 absolute top-0 left-0 z-10"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
                     allowFullScreen
                     onLoad={() => {
+                      isCurrentServerLoadedRef.current = true;
                       setIsVideoLoading(false);
-                      setServerSlowError(null);
+                    }}
+                    onError={() => {
+                      if (effectiveServer) {
+                        handleServerFailure(effectiveServer, 'Embed iframe load error');
+                      }
                     }}
                   />
                 )}
              </div>
              
              {/* Select Server Section (Directly Below Video Player) */}
-             {hasAnyServer && (
+             {/* Requirements 4 & 7: Show ONLY servers that have valid URLs and hide dead servers */}
+             {aliveServers.length > 0 && (
                <div className="mt-5 w-full bg-[#121214]/90 border border-white/10 rounded-2xl p-4 sm:p-5 backdrop-blur-md shadow-2xl">
                  <div className="flex items-center justify-between mb-3.5">
                    <div className="flex items-center gap-2.5">
@@ -586,12 +737,19 @@ export default function WatchPage() {
                      </div>
                      <h2 className="text-base sm:text-lg font-bold text-white tracking-wide">Select Server</h2>
                    </div>
+                   <span className="text-xs text-white/40">
+                     {aliveServers.length} active {aliveServers.length === 1 ? 'server' : 'servers'}
+                   </span>
                  </div>
 
-                 {/* THREE Server Cards in One Row */}
-                 <div className="grid grid-cols-3 gap-2.5 sm:gap-4 w-full">
-                   {/* Server 1: Abyss (Display only if Server 1 URL exists) */}
-                   {hasServer1 && (
+                 {/* Server cards dynamically adapted to alive servers */}
+                 <div className={`grid gap-2.5 sm:gap-4 w-full ${
+                   aliveServers.length === 1 ? 'grid-cols-1 max-w-xs' :
+                   aliveServers.length === 2 ? 'grid-cols-2 max-w-lg' :
+                   'grid-cols-3'
+                 }`}>
+                   {/* Server 1: Abyss (Display only if valid and not dead) */}
+                   {aliveServers.includes('server1') && (
                      <button
                        type="button"
                        onClick={() => handleSelectServer('server1')}
@@ -607,6 +765,7 @@ export default function WatchPage() {
                           }`}>
                             Server 1
                           </span>
+                          <span className="text-[10px] text-white/40 truncate">Abyss Stream</span>
                        </div>
                        <div className="flex items-center shrink-0" title="Online">
                          <span className="relative flex h-2 sm:h-2.5 w-2 sm:w-2.5">
@@ -617,8 +776,8 @@ export default function WatchPage() {
                      </button>
                    )}
 
-                   {/* Server 2: Filemoon (Display only if Server 2 URL exists) */}
-                   {hasServer2 && (
+                   {/* Server 2: Filemoon (Display only if valid and not dead) */}
+                   {aliveServers.includes('server2') && (
                      <button
                        type="button"
                        onClick={() => handleSelectServer('server2')}
@@ -634,6 +793,7 @@ export default function WatchPage() {
                           }`}>
                             Server 2
                           </span>
+                          <span className="text-[10px] text-white/40 truncate">FileMoon</span>
                        </div>
                        <div className="flex items-center shrink-0" title="Online">
                          <span className="relative flex h-2 sm:h-2.5 w-2 sm:w-2.5">
@@ -644,8 +804,8 @@ export default function WatchPage() {
                      </button>
                    )}
 
-                   {/* Server 3: VDOHide (Display only if Server 3 URL exists) */}
-                   {hasServer3 && (
+                   {/* Server 3: VDOHide (Display only if valid and not dead) */}
+                   {aliveServers.includes('server3') && (
                      <button
                        type="button"
                        onClick={() => handleSelectServer('server3')}
@@ -661,6 +821,7 @@ export default function WatchPage() {
                           }`}>
                             Server 3
                           </span>
+                          <span className="text-[10px] text-white/40 truncate">VDOHide</span>
                        </div>
                        <div className="flex items-center shrink-0" title="Online">
                          <span className="relative flex h-2 sm:h-2.5 w-2 sm:w-2.5">

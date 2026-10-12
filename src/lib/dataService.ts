@@ -219,6 +219,47 @@ export function extractVDOHideUrl(input?: string): string {
   return url;
 }
 
+// Helper to validate whether a streaming URL is non-empty, well-formed, and not broken/placeholder
+export function isValidStreamUrl(input?: any): boolean {
+  if (!input || typeof input !== 'string') return false;
+  let url = input.trim();
+  const iframeMatch = url.match(/src=["']([^"']+)["']/i);
+  if (iframeMatch && iframeMatch[1]) {
+    url = iframeMatch[1].trim();
+  }
+  if (url.startsWith('//')) {
+    url = `https:${url}`;
+  }
+  if (url.length < 10) return false;
+  const lower = url.toLowerCase();
+  if (
+    lower === 'null' ||
+    lower === 'undefined' ||
+    lower === 'about:blank' ||
+    lower === 'none' ||
+    lower === 'false' ||
+    lower === '#' ||
+    lower.startsWith('javascript:') ||
+    lower === 'https://' ||
+    lower === 'http://'
+  ) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    if (!parsed.hostname || (!parsed.hostname.includes('.') && parsed.hostname !== 'localhost')) {
+      return false;
+    }
+    if (parsed.hostname === 'example.com' || parsed.hostname === 'example.org') {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Helper to reliably map Server 1 (Abyss), Server 2 (FileMoon), Server 3 (VDOHide)
 export function resolveEpisodeServers(data: any): { server1: string; server2: string; server3: string } {
   if (!data) return { server1: '', server2: '', server3: '' };
@@ -244,7 +285,19 @@ export function resolveEpisodeServers(data: any): { server1: string; server2: st
     s3 = extractVDOHideUrl(data.videoUrl || data.video_url);
   }
 
-  return { server1: s1, server2: s2, server3: s3 };
+  // Fallback to videoUrl / video_url if s1 is empty and it's not filemoon or vdohide
+  if (!s1 && (data.videoUrl || data.video_url)) {
+    const fallbackUrl = extractAbyssUrl(data.videoUrl || data.video_url);
+    if (!fallbackUrl.includes('filemoon') && !isVdoUrl(fallbackUrl)) {
+      s1 = fallbackUrl;
+    }
+  }
+
+  return { 
+    server1: isValidStreamUrl(s1) ? s1 : '', 
+    server2: isValidStreamUrl(s2) ? s2 : '', 
+    server3: isValidStreamUrl(s3) ? s3 : '' 
+  };
 }
 
 export function normalizeAnime(item: any, id?: string): AnimeItem {
