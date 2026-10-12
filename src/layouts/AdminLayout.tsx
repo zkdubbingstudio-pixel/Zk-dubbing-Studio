@@ -79,7 +79,7 @@ export default function AdminLayout() {
       await signOutUser();
     } catch {}
     setUser(null);
-    navigate('/');
+    navigate('/login', { replace: true });
   };
 
   if (loading) {

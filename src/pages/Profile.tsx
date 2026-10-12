@@ -33,17 +33,12 @@ export default function Profile() {
 
   const effectiveUserId = user?.uid || firebaseUser?.uid || null;
 
-  // If the user is not signed in, redirect to Google Sign-In instead of showing fake profile data
+  // User is guaranteed by ProtectedRoute. If somehow not authenticated, navigate to login.
   useEffect(() => {
     if (!loading && !user && !firebaseUser) {
-      setIsRedirecting(true);
-      signInWithGoogle({ preferRedirect: true }).catch((err) => {
-        console.warn('Google Sign-In redirect initiation:', err);
-        setIsRedirecting(false);
-        setAuthError(err?.message || 'Please sign in with Google to view your profile.');
-      });
+      navigate('/login?redirect=%2Fprofile', { replace: true });
     }
-  }, [loading, user, firebaseUser]);
+  }, [loading, user, firebaseUser, navigate]);
 
   // Load Continue Watching ONLY from user's real watch history in Supabase user_progress table
   useEffect(() => {

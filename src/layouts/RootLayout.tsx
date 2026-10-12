@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link, Outlet, useLocation } from 'react-router-dom';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Search, Menu, X, LogOut, Shield, User, Sliders, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { signInWithGoogle, signOutUser, getFriendlyAuthErrorMessage } from '../lib/authService';
@@ -13,6 +13,7 @@ export default function RootLayout() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const { user, firebaseUser, authError, setAuthError, authSuccessMessage, setAuthSuccessMessage } = useAuthStore();
   const location = useLocation();
+  const navigate = useNavigate();
 
   // Scroll to top on route change
   useEffect(() => {
@@ -58,6 +59,7 @@ export default function RootLayout() {
   const handleLogout = async () => {
     try {
       await signOutUser();
+      navigate('/login', { replace: true });
     } catch (error: any) {
       setAuthError(getFriendlyAuthErrorMessage(error));
     }

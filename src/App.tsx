@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, lazy, Suspense } from 'react';
 import { supabase } from './lib/supabase';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -13,9 +13,11 @@ import { User } from './types';
 
 import RootLayout from './layouts/RootLayout';
 import AdminLayout from './layouts/AdminLayout';
+import ProtectedRoute from './components/ProtectedRoute';
 
-// Eager load Home for instant First Contentful Paint
+// Eager load Home & Login for instant First Contentful Paint
 import Home from './pages/Home';
+import Login from './pages/Login';
 
 // Lazy loaded client pages for optimal performance & code splitting
 const AnimeDetails = lazy(() => import('./pages/AnimeDetails'));
@@ -123,8 +125,18 @@ export default function App() {
     <BrowserRouter>
       <Suspense fallback={<PageFallback />}>
         <Routes>
-          {/* Main User Routes (Consolidated into single RootLayout) */}
-          <Route path="/" element={<RootLayout />}>
+          {/* Public Login Route (Requirement 8) */}
+          <Route path="/login" element={<Login />} />
+
+          {/* Main User Routes - Protected (Requirement 8: Protect all pages except Login) */}
+          <Route 
+            path="/" 
+            element={
+              <ProtectedRoute>
+                <RootLayout />
+              </ProtectedRoute>
+            }
+          >
             <Route index element={<Home />} />
             <Route path="search" element={<Search />} />
             <Route path="browse" element={<Search />} />
@@ -139,8 +151,15 @@ export default function App() {
             <Route path="watch/:animeId/:seasonId/:id" element={<WatchPage />} />
           </Route>
 
-          {/* Admin Management Routes */}
-          <Route path="/admin" element={<AdminLayout />}>
+          {/* Admin Management Routes - Protected */}
+          <Route 
+            path="/admin" 
+            element={
+              <ProtectedRoute>
+                <AdminLayout />
+              </ProtectedRoute>
+            }
+          >
             <Route index element={<AdminDashboard />} />
             <Route path="anime" element={<AdminAnime />} />
             <Route path="seasons" element={<AdminSeasons />} />
@@ -151,6 +170,9 @@ export default function App() {
             <Route path="settings" element={<AdminSettings />} />
             <Route path="security" element={<AdminSecurity />} />
           </Route>
+
+          {/* Catch-all route */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
     </BrowserRouter>

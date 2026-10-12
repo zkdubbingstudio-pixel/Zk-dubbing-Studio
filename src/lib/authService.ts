@@ -2,11 +2,13 @@ import {
   signInWithPopup, 
   signInWithRedirect, 
   getRedirectResult, 
+  signInWithCredential,
   signOut, 
-  User as FirebaseUser 
+  User as FirebaseUser,
+  GoogleAuthProvider
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, googleProvider, browserPopupRedirectResolver, db } from './firebase';
+import { auth, googleProvider, browserPopupRedirectResolver, db, PRODUCTION_ORIGIN, PRODUCTION_DOMAIN } from './firebase';
 import { User } from '../types';
 import { supabase } from './supabase';
 
@@ -147,28 +149,44 @@ export async function saveUserToFirestore(firebaseUser: FirebaseUser): Promise<U
 }
 
 /**
+ * Sign in using Google ID Token (from Google Identity Services / One-Tap / Custom Tabs)
+ * Bypasses cross-origin redirect and iframe blank page issues completely.
+ */
+export async function signInWithGoogleIdToken(idToken: string): Promise<User> {
+  if (!auth) {
+    throw new Error('Firebase Authentication is currently unavailable.');
+  }
+  const credential = GoogleAuthProvider.credential(idToken);
+  const cred = await signInWithCredential(auth, credential);
+  return await saveUserToFirestore(cred.user);
+}
+
+/**
  * Initiates Google Sign-In with automatic fallback between Popup and Redirect.
  * Specially optimized for Android Chrome and mobile web browsers.
  */
-export async function signInWithGoogle(options?: { preferRedirect?: boolean }): Promise<FirebaseUser | null> {
+export async function signInWithGoogle(options?: { preferRedirect?: boolean; returnUrl?: string }): Promise<FirebaseUser | null> {
   if (!auth) {
     throw new Error('Firebase Authentication is currently unavailable. Please check your network or configuration.');
   }
 
-  const isMobile = isMobileBrowser();
-  const shouldUseRedirect = Boolean(options?.preferRedirect);
-
-  // 1. If redirect is explicitly preferred (e.g. mobile redirect button)
-  if (shouldUseRedirect) {
+  // Store return URL in sessionStorage
+  if (typeof sessionStorage !== 'undefined') {
+    const target = options?.returnUrl || (typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/');
     try {
-      await signInWithRedirect(auth, googleProvider);
-      return null; // Will redirect away from current page
-    } catch (redirectErr: any) {
-      console.warn('Redirect sign-in error, attempting popup fallback:', redirectErr);
-    }
+      sessionStorage.setItem('zk_auth_return_url', target);
+    } catch {}
   }
 
-  // 2. Attempt Popup sign-in
+  const shouldUseRedirect = Boolean(options?.preferRedirect);
+
+  // 1. If redirect is explicitly preferred
+  if (shouldUseRedirect) {
+    await signInWithRedirect(auth, googleProvider);
+    return null;
+  }
+
+  // 2. Attempt Popup sign-in first (works across desktop and Android Chrome tabs)
   try {
     const cred = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
     if (cred && cred.user) {
@@ -177,28 +195,14 @@ export async function signInWithGoogle(options?: { preferRedirect?: boolean }): 
     }
     return null;
   } catch (popupErr: any) {
-    // If user explicitly closed/cancelled the popup, respect the cancellation
     if (popupErr?.code === 'auth/popup-closed-by-user') {
       throw popupErr;
     }
 
-    // If popup was blocked by browser or failed in mobile webview, automatically fall back to signInWithRedirect
-    if (
-      popupErr?.code === 'auth/popup-blocked' ||
-      popupErr?.code === 'auth/cancelled-popup-request' ||
-      popupErr?.code === 'auth/internal-error' ||
-      isMobile
-    ) {
-      console.info('Popup blocked or mobile environment detected; seamlessly falling back to Google redirect sign-in...', popupErr?.code);
-      try {
-        await signInWithRedirect(auth, googleProvider);
-        return null;
-      } catch (redirectErr: any) {
-        console.error('Redirect sign-in error after popup fallback:', redirectErr);
-        throw redirectErr;
-      }
-    }
-    throw popupErr;
+    // If popup was blocked or failed, seamlessly fall back to signInWithRedirect
+    console.info('Popup sign-in not completed, falling back to Google redirect sign-in...', popupErr?.code);
+    await signInWithRedirect(auth, googleProvider);
+    return null;
   }
 }
 
@@ -210,13 +214,30 @@ export async function processRedirectResult(): Promise<User | null> {
   try {
     const result = await getRedirectResult(auth);
     if (result && result.user) {
-      return await saveUserToFirestore(result.user);
+      const user = await saveUserToFirestore(result.user);
+      return user;
     }
   } catch (error: any) {
     console.error('Error handling redirect sign-in result:', error);
     throw error;
   }
   return null;
+}
+
+/**
+ * Calculates the destination URL to return to after successful login
+ */
+export function getPostLoginRedirectUrl(): string {
+  if (typeof sessionStorage !== 'undefined') {
+    try {
+      const saved = sessionStorage.getItem('zk_auth_return_url');
+      if (saved && saved !== '/login') {
+        sessionStorage.removeItem('zk_auth_return_url');
+        return saved;
+      }
+    } catch {}
+  }
+  return '/';
 }
 
 /**

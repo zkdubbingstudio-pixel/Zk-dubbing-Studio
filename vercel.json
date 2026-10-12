@@ -15,7 +15,7 @@
       "headers": [
         {
           "key": "Referrer-Policy",
-          "value": "no-referrer"
+          "value": "no-referrer-when-downgrade"
         },
         {
           "key": "X-Content-Type-Options",
@@ -25,6 +25,10 @@
     }
   ],
   "rewrites": [
+    {
+      "source": "/__/auth/(.*)",
+      "destination": "https://gen-lang-client-0843629033.firebaseapp.com/__/auth/$1"
+    },
     {
       "source": "/(.*)",
       "destination": "/index.html"
