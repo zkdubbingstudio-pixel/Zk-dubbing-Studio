@@ -662,13 +662,15 @@ export async function getUnifiedCatalog(): Promise<UnifiedCatalog> {
 
     // Cache the whole catalog for 5 minutes (Requirement 6)
     setCachedData(cacheKey, catalog);
-    // Also warm individual cache keys for instant hits across other components
+    // Also warm individual cache keys for instant hits across other components (Requirement 4)
     setCachedData('all_anime', allAnime);
     setCachedData('featured_anime', feat);
     setCachedData('trending_anime', trend);
     setCachedData('new_drops', newDrops);
     setCachedData('all_seasons', allSeasons);
     setCachedData('all_episodes', allEpisodes);
+    allAnime.forEach(a => setCachedData(`anime_${a.id}`, a));
+    allEpisodes.forEach(ep => setCachedData(`episode_${ep.id}`, ep));
 
     return catalog;
   } catch (err: any) {
@@ -1022,6 +1024,7 @@ export async function getAnimeFullDetails(id: string): Promise<{
       setCachedData(`anime_${anime.id}`, anime);
       setCachedData(`seasons_${anime.id}`, seasons);
       setCachedData(`episodes_${anime.id}`, episodes);
+      episodes.forEach(ep => setCachedData(`episode_${ep.id}`, ep));
 
       return payload;
     }
@@ -1276,6 +1279,9 @@ export async function getEpisodesBySeason(seasonId: string, animeId?: string): P
 // 8. Get Episode by ID (Supabase Only - Requirement 7)
 export async function getEpisodeById(id: string): Promise<EpisodeItem | null> {
   if (!id) return null;
+  const cacheKey = `episode_${id}`;
+  const cached = getCachedData<EpisodeItem>(cacheKey);
+  if (cached) return cached;
 
   try {
     const res = await executeSupabaseWithRetry(async () => {
@@ -1287,7 +1293,9 @@ export async function getEpisodeById(id: string): Promise<EpisodeItem | null> {
     });
 
     if (res?.data) {
-      return normalizeEpisodeDoc(res.data.id, res.data);
+      const normalized = normalizeEpisodeDoc(res.data.id, res.data);
+      setCachedData(cacheKey, normalized);
+      return normalized;
     }
 
     // If ID belongs to a standalone Movie, resolve from anime table directly
@@ -1307,7 +1315,7 @@ export async function getEpisodeById(id: string): Promise<EpisodeItem | null> {
 
       if (isMovie) {
         const { server1, server2, server3 } = resolveEpisodeServers(movieAnime);
-        return {
+        const movieItem: EpisodeItem = {
           id: movieAnime.id,
           animeId: movieAnime.id,
           anime_id: movieAnime.id,
@@ -1334,10 +1342,15 @@ export async function getEpisodeById(id: string): Promise<EpisodeItem | null> {
           published: true,
           isMovie: true,
         };
+        setCachedData(cacheKey, movieItem);
+        return movieItem;
       }
     }
   } catch (err: any) {
     console.error(`[Supabase Real Error - getEpisodeById(${id})]:`, formatDbError(err));
+    if (cached) return cached;
+    const stale = getCachedData<EpisodeItem>(cacheKey, true);
+    if (stale) return stale;
   }
 
   return null;

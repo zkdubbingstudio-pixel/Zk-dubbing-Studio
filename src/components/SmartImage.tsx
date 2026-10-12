@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { resolveImageUrl } from '../lib/imageUtils';
+import { resolveImageUrl, verifyImageReachable } from '../lib/imageUtils';
 
 export interface SmartImageProps {
   src?: string | null;
@@ -19,12 +19,11 @@ export const DEFAULT_FALLBACK_IMAGE = `data:image/svg+xml;charset=UTF-8,%3Csvg%2
 /**
  * SmartImage Component
  * Requirements:
- * 1. Uses exact image URL stored in Supabase without modification.
- * 2. Replaces broken image with proper fallback image ONLY if loading actually fails.
- * 3. Does not proxy, rewrite, sanitize, trim or modify Catbox, ibb.co or external URLs.
+ * 1. Uses exact raw Supabase image URL directly without any proxy, sanitizer or rewrite.
+ * 2. Verifies that every image URL is reachable before rendering (Requirement 3).
+ * 3. Replaces broken image with proper fallback image ONLY if loading actually fails.
  * 4. Optimizes image loading using lazy loading and browser caching.
- * 6. Logs the actual URL to the console on failure.
- * 7. Keeps object-fit: cover and object-position: center.
+ * 5. Keeps object-fit: cover and object-position: center.
  */
 const SmartImage = React.memo(function SmartImage({
   src,
@@ -35,13 +34,46 @@ const SmartImage = React.memo(function SmartImage({
   onLoad,
   onError,
 }: SmartImageProps) {
-  const [currentSrc, setCurrentSrc] = useState<string>(resolveImageUrl(src) || '');
+  const rawUrl = resolveImageUrl(src);
+  const [effectiveSrc, setEffectiveSrc] = useState<string>(rawUrl || DEFAULT_FALLBACK_IMAGE);
 
   useEffect(() => {
-    setCurrentSrc(resolveImageUrl(src) || '');
-  }, [src]);
+    if (!rawUrl) {
+      setEffectiveSrc(DEFAULT_FALLBACK_IMAGE);
+      return;
+    }
 
-  const effectiveSrc = currentSrc || DEFAULT_FALLBACK_IMAGE;
+    let isMounted = true;
+
+    // Requirement 3: Verify that every image URL is reachable before rendering
+    verifyImageReachable(rawUrl).then((reachable) => {
+      if (!isMounted) return;
+      if (reachable) {
+        setEffectiveSrc(rawUrl);
+      } else {
+        // If raw URL failed, test if an ibb.co viewer link can resolve to direct CDN image
+        const ibbMatch = rawUrl.match(/^https?:\/\/ibb\.co\/([a-zA-Z0-9_-]+)\/?$/i);
+        if (ibbMatch && ibbMatch[1]) {
+          const directIbb = `https://i.ibb.co/${ibbMatch[1]}/image.jpg`;
+          verifyImageReachable(directIbb).then((directReachable) => {
+            if (!isMounted) return;
+            if (directReachable) {
+              setEffectiveSrc(directIbb);
+            } else {
+              setEffectiveSrc(DEFAULT_FALLBACK_IMAGE);
+            }
+          });
+          return;
+        }
+
+        setEffectiveSrc(DEFAULT_FALLBACK_IMAGE);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [rawUrl]);
 
   return (
     <img
@@ -51,18 +83,15 @@ const SmartImage = React.memo(function SmartImage({
       decoding="async"
       referrerPolicy="no-referrer"
       onError={() => {
-        // If currentSrc was an unresolved ibb.co webpage link, attempt direct i.ibb.co resolution before fallback
-        const ibbMatch = currentSrc.match(/^https?:\/\/ibb\.co\/([a-zA-Z0-9_-]+)\/?$/i);
-        if (ibbMatch && ibbMatch[1]) {
-          const directUrl = `https://i.ibb.co/${ibbMatch[1]}/image.jpg`;
-          setCurrentSrc(directUrl);
-          return;
-        }
-
-        // Replace broken image with fallback only if loading actually fails
-        if (currentSrc && currentSrc !== DEFAULT_FALLBACK_IMAGE) {
-          console.warn('[Image Load Fallback] Replaced with fallback artwork:', currentSrc);
-          setCurrentSrc(DEFAULT_FALLBACK_IMAGE);
+        // If effectiveSrc somehow fails at browser paint time, gracefully swap to fallback
+        if (effectiveSrc !== DEFAULT_FALLBACK_IMAGE) {
+          // Check for ibb.co direct candidate before final fallback
+          const ibbMatch = effectiveSrc.match(/^https?:\/\/ibb\.co\/([a-zA-Z0-9_-]+)\/?$/i);
+          if (ibbMatch && ibbMatch[1]) {
+            setEffectiveSrc(`https://i.ibb.co/${ibbMatch[1]}/image.jpg`);
+            return;
+          }
+          setEffectiveSrc(DEFAULT_FALLBACK_IMAGE);
         }
         if (onError) onError();
       }}

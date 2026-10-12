@@ -30,3 +30,56 @@ export function resolveImageUrl(
   // Return the exact database URL without modification
   return trimmed;
 }
+
+const reachabilityCache = new Map<string, boolean>();
+
+/**
+ * Requirement 3: Verify that every image URL is reachable before rendering.
+ * Probes the image off-screen using no-referrer.
+ * Results are cached in memory for zero repeat overhead.
+ */
+export function verifyImageReachable(url: string, timeoutMs = 4500): Promise<boolean> {
+  if (!url || typeof window === 'undefined') return Promise.resolve(false);
+  const trimmed = url.trim();
+  if (
+    !trimmed || 
+    trimmed === 'null' || 
+    trimmed === 'undefined' || 
+    trimmed.startsWith('data:image/svg+xml')
+  ) {
+    return Promise.resolve(true);
+  }
+
+  if (reachabilityCache.has(trimmed)) {
+    return Promise.resolve(reachabilityCache.get(trimmed)!);
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const probe = new window.Image();
+    probe.referrerPolicy = 'no-referrer';
+
+    const cleanup = () => {
+      probe.onload = null;
+      probe.onerror = null;
+    };
+
+    const finish = (reachable: boolean) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reachabilityCache.set(trimmed, reachable);
+      resolve(reachable);
+    };
+
+    probe.onload = () => finish(true);
+    probe.onerror = () => finish(false);
+
+    // Timeout: if network is slow, allow image to attempt rendering
+    setTimeout(() => {
+      finish(true);
+    }, timeoutMs);
+
+    probe.src = trimmed;
+  });
+}

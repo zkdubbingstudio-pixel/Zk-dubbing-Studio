@@ -317,18 +317,17 @@ export default function WatchPage() {
     effectiveServer = 'server3';
   }
 
-  // Restore previous server choice from localStorage if valid for this specific episode
+  // Keep the selected server alive while switching episodes (Requirement 5)
   useEffect(() => {
     if (!episode) return;
-    const epId = episode.id || paramId;
-    const saved = epId ? (localStorage.getItem(`zk_selected_server_${epId}`) as any) : null;
+    const preferred = (localStorage.getItem('zk_preferred_server') as any) || selectedServer;
 
-    if (saved === 'server1' && hasServer1) {
-      setSelectedServer('server1');
-    } else if (saved === 'server2' && hasServer2) {
+    if (preferred === 'server2' && hasServer2) {
       setSelectedServer('server2');
-    } else if (saved === 'server3' && hasServer3) {
+    } else if (preferred === 'server3' && hasServer3) {
       setSelectedServer('server3');
+    } else if (preferred === 'server1' && hasServer1) {
+      setSelectedServer('server1');
     } else if (hasServer1) {
       setSelectedServer('server1');
     } else if (hasServer2) {
@@ -355,8 +354,7 @@ export default function WatchPage() {
     setServerSlowError(null);
   }, [episode?.id, paramId, effectiveServer]);
 
-  // Requirement 9: Improve video player performance & preload metadata
-  // Requirement 10: If FileMoon or VDOHide is slow, automatically retry once before showing error
+  // Requirement 5: Improve player performance, preload metadata, auto-retry once
   useEffect(() => {
     if (!activeStreamUrl) {
       setIsVideoLoading(false);
@@ -379,22 +377,22 @@ export default function WatchPage() {
     // Safety timer to clear loading spinner
     const safetyTimer = setTimeout(() => {
       setIsVideoLoading(false);
-    }, 14000);
+    }, 18000);
 
-    // Automatic retry once for FileMoon (server2) and VDOHide (server3) if slow
+    // Requirement 5: Retry once automatically before showing "responding slowly"
     let slowTimer: NodeJS.Timeout | null = null;
     if (effectiveServer === 'server2' || effectiveServer === 'server3') {
       const serverKey = `${episode?.id || paramId}_${effectiveServer}`;
       slowTimer = setTimeout(() => {
         if (!retriedServersRef.current[serverKey]) {
           retriedServersRef.current[serverKey] = true;
-          console.warn(`[Video Player] ${effectiveServer === 'server2' ? 'FileMoon' : 'VDOHide'} is slow, automatically retrying once...`);
+          console.warn(`[Video Player] ${effectiveServer === 'server2' ? 'FileMoon' : 'VDOHide'} taking longer, automatically retrying once...`);
           setRetryCount(prev => prev + 1);
         } else {
-          setServerSlowError(`${effectiveServer === 'server2' ? 'FileMoon' : 'VDOHide'} is responding slowly.`);
+          setServerSlowError(`${effectiveServer === 'server2' ? 'FileMoon' : 'VDOHide'} is taking longer to respond.`);
           setIsVideoLoading(false);
         }
-      }, 7000);
+      }, 14000);
     }
 
     return () => {
@@ -493,13 +491,24 @@ export default function WatchPage() {
 
              {/* Player Container (Server 1 Abyss / Server 2 FileMoon / Server 3 VDOHide / Direct Video Player) */}
              <div className="w-full aspect-video relative rounded-2xl overflow-hidden border border-brand shadow-[0_0_20px_rgba(0,229,255,0.3)] bg-black">
-                {/* Loading Spinner - Requirement 9: Show loading spinner until the player is ready */}
+                {/* Proper Loading Spinner while player initializes (Requirement 6) */}
                 {isVideoLoading && activeStreamUrl && (
-                  <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-[2px] pointer-events-none transition-opacity duration-300">
-                    <div className="w-12 h-12 border-4 border-white/10 border-t-brand rounded-full animate-spin"></div>
-                    <p className="text-white/60 text-xs mt-3 font-medium tracking-wide">
-                      {retryCount > 0 ? 'Retrying streaming server...' : 'Buffering player...'}
+                  <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/85 backdrop-blur-[4px] pointer-events-none transition-opacity duration-300">
+                    <div className="relative flex items-center justify-center">
+                      <div className="w-16 h-16 border-4 border-white/10 border-t-[#00e5ff] rounded-full animate-spin"></div>
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <Play className="w-6 h-6 text-[#00e5ff] fill-[#00e5ff] opacity-80 ml-0.5" />
+                      </div>
+                    </div>
+                    <p className="text-white text-sm mt-4 font-bold tracking-wide">
+                      {retryCount > 0 ? 'Retrying Stream Server...' : 'Initializing Player...'}
                     </p>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="w-2 h-2 rounded-full bg-[#00e5ff] animate-ping"></span>
+                      <p className="text-white/50 text-xs font-medium">
+                        Connecting to {effectiveServer === 'server1' ? 'Server 1 (Abyss)' : effectiveServer === 'server2' ? 'Server 2 (FileMoon)' : 'Server 3 (VDOHide)'}
+                      </p>
+                    </div>
                   </div>
                 )}
 
