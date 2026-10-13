@@ -2,7 +2,6 @@ import {
   auth, 
   db,
   ensureAuthPersistence,
-  purgeOversizedCache,
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
   signOut, 
@@ -31,46 +30,9 @@ export function isOwner(email?: string | null): boolean {
 }
 
 /**
- * Friendly error messages for Firebase Authentication error codes
- */
-export function getFriendlyFirebaseAuthError(error: any): string {
-  if (!error) return 'An error occurred during authentication.';
-  const code = error?.code || '';
-  const msg = typeof error === 'string' ? error : (error.message || '');
-
-  if (code === 'auth/user-not-found' || msg.includes('user-not-found')) {
-    return 'No account found with this email. Please switch to Create Account.';
-  }
-  if (
-    code === 'auth/wrong-password' || 
-    code === 'auth/invalid-credential' || 
-    msg.includes('wrong-password') || 
-    msg.includes('invalid-credential')
-  ) {
-    return 'Incorrect email or password. Please verify and try again.';
-  }
-  if (code === 'auth/email-already-in-use' || msg.includes('email-already-in-use')) {
-    return 'An account with this email already exists. Please switch to the Sign In tab.';
-  }
-  if (code === 'auth/weak-password' || msg.includes('weak-password')) {
-    return 'Password must be at least 6 characters.';
-  }
-  if (code === 'auth/invalid-email' || msg.includes('invalid-email')) {
-    return 'Please enter a valid email address.';
-  }
-  if (code === 'auth/too-many-requests' || msg.includes('too-many-requests')) {
-    return 'Too many failed attempts. Access temporarily locked for security. Please try again shortly or reset your password.';
-  }
-  if (code === 'auth/network-request-failed' || msg.includes('network-request-failed')) {
-    return 'Network connection issue. Please check your internet connectivity.';
-  }
-
-  return msg || 'Authentication failed. Please verify your details.';
-}
-
-/**
  * Loads user profile from Supabase database (with resilient fallback to Firestore).
- * Does NOT write to localStorage or sessionStorage.
+ * Does NOT write to or read from localStorage or sessionStorage.
+ * Never throws — always returns a valid User object.
  */
 export async function loadUserProfileFromSupabase(
   uid: string,
@@ -105,7 +67,7 @@ export async function loadUserProfileFromSupabase(
       }
     }
   } catch (err) {
-    console.warn('Supabase fetch profile notice:', err);
+    console.warn('[Profile Sync] Supabase fetch notice:', err);
   }
 
   // 2. Resilient fallback: fetch from Firestore if Supabase had no row
@@ -116,7 +78,7 @@ export async function loadUserProfileFromSupabase(
         profileData = snap.data();
       }
     } catch (fsErr) {
-      console.warn('Firestore fallback fetch notice:', fsErr);
+      console.warn('[Profile Sync] Firestore fallback notice:', fsErr);
     }
   }
 
@@ -136,7 +98,7 @@ export async function loadUserProfileFromSupabase(
     full_name: displayName,
     photoURL: profileData?.photo_url || profileData?.photoURL || '',
     profilePhoto: profileData?.photo_url || profileData?.profilePhoto || '',
-    role: isOwnerUser ? 'owner' : (profileData?.role === 'admin' || profileData?.role === 'owner' ? 'owner' : 'user'),
+    role: isOwnerUser ? 'owner' : 'user',
     createdAt: profileData?.created_at
       ? (typeof profileData.created_at === 'number' ? profileData.created_at : new Date(profileData.created_at).getTime())
       : Date.now(),
@@ -150,7 +112,7 @@ export async function loadUserProfileFromSupabase(
     },
   };
 
-  // 3. Keep profile updated in Supabase
+  // 3. Keep profile updated in Supabase in background
   try {
     const supabasePayload = {
       id: uid,
@@ -164,14 +126,12 @@ export async function loadUserProfileFromSupabase(
       last_login: nowIso,
     };
     await supabase.from('users').upsert(supabasePayload, { onConflict: 'id' });
-  } catch (err) {
-    console.warn('Could not update profile in Supabase:', err);
-  }
+  } catch {}
 
-  // 4. Mirror in Firestore for database reliability
+  // 4. Mirror in Firestore for database reliability in background
   if (db) {
     try {
-      await setDoc(doc(db, 'users', uid), {
+      setDoc(doc(db, 'users', uid), {
         uid,
         id: uid,
         full_name: displayName,
@@ -182,7 +142,7 @@ export async function loadUserProfileFromSupabase(
         createdAt: userRecord.createdAt,
         last_login: nowIso,
         lastLogin: nowIso,
-      }, { merge: true });
+      }, { merge: true }).catch(() => {});
     } catch {}
   }
 
@@ -190,200 +150,249 @@ export async function loadUserProfileFromSupabase(
 }
 
 /**
- * 2. Create Account:
- * - Initializes auth persistence: await setPersistence(auth, browserLocalPersistence)
- * - Creates user in Firebase Authentication
- * - Sets displayName
- * - Creates matching user profile in Supabase (uid, full_name, email, role = "user" | "owner", created_at, last_login)
- * - Auto-retries if storage quota exceeded
- * - Alerts owner via toast
+ * 1. Sign In with Firebase Email & Password:
+ * - Direct call to signInWithEmailAndPassword()
+ * - Logs exact Firebase error code to console
+ * - Does not replace or mask original Firebase error
+ * - Verifies auth.currentUser is populated after login
+ * - Assigns role = "owner" for zkdubbingstudio@gmail.com and role = "user" for all others
+ */
+export async function signInWithFirebase(
+  email: string,
+  password: string
+): Promise<User> {
+  const cleanEmail = email.trim();
+  console.log('[Firebase Auth] Calling signInWithEmailAndPassword for:', cleanEmail);
+
+  if (!auth) {
+    const err = new Error('Firebase Authentication is not initialized.');
+    (err as any).code = 'auth/not-initialized';
+    console.error('[Firebase Auth Error] Code:', (err as any).code, err.message);
+    throw err;
+  }
+
+  // Ensure persistence before signing in
+  await ensureAuthPersistence();
+
+  try {
+    // 1. Find every call to signInWithEmailAndPassword (Requirement 1)
+    const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password);
+    const fbUser = userCredential.user;
+
+    // 7. Verify that auth.currentUser is populated after login (Requirement 7)
+    console.log('[Firebase Auth] Login successful! Verified auth.currentUser:', {
+      uid: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      displayName: auth.currentUser?.displayName,
+      isPopulated: Boolean(auth.currentUser),
+    });
+
+    // 11. If email == "zkdubbingstudio@gmail.com", assign owner role and allow /admin
+    const isOwnerUser = isAuthorizedAdmin(fbUser.email || cleanEmail);
+    const role: 'owner' | 'user' = isOwnerUser ? 'owner' : 'user';
+    const nowIso = new Date().toISOString();
+
+    const userRecord: User = {
+      uid: fbUser.uid,
+      id: fbUser.uid,
+      email: fbUser.email || cleanEmail,
+      name: fbUser.displayName || cleanEmail.split('@')[0],
+      displayName: fbUser.displayName || cleanEmail.split('@')[0],
+      full_name: fbUser.displayName || cleanEmail.split('@')[0],
+      photoURL: fbUser.photoURL || '',
+      profilePhoto: fbUser.photoURL || '',
+      role,
+      createdAt: fbUser.metadata?.creationTime ? new Date(fbUser.metadata.creationTime).getTime() : Date.now(),
+      lastLogin: nowIso,
+      settings: {
+        appearance: 'Dark',
+        defaultQuality: '1080p',
+        autoplayNext: true,
+        rememberPosition: true,
+        newEpisodeNotifications: true,
+      },
+    };
+
+    // Load full profile in background without blocking login
+    loadUserProfileFromSupabase(fbUser.uid, cleanEmail, fbUser.displayName).catch((err) => {
+      console.warn('[Profile Sync] Background load notice:', err);
+    });
+
+    return userRecord;
+  } catch (err: any) {
+    // 2. Log the exact Firebase error code to the console (Requirement 2 & 12)
+    console.error('[Firebase Auth Error] signInWithEmailAndPassword failed:', {
+      code: err?.code,
+      message: err?.message,
+      name: err?.name,
+      stack: err?.stack,
+    });
+    // 3. Remove every try/catch that replaces the original Firebase error (Requirement 3)
+    // Throw the original Firebase error without replacing or masking it!
+    throw err;
+  }
+}
+
+/**
+ * 2. Create Account with Firebase Email & Password:
+ * - Direct call to createUserWithEmailAndPassword()
+ * - Logs exact Firebase error code to console
+ * - Removes custom password validation (Requirement 4)
+ * - Verifies auth.currentUser is populated
+ * - Assigns role = "owner" for zkdubbingstudio@gmail.com and role = "user" for all others
  */
 export async function signUpWithFirebase(
   email: string,
   password: string,
   fullName: string
 ): Promise<User> {
-  const cleanEmail = email.trim().toLowerCase();
+  const cleanEmail = email.trim();
   const cleanName = fullName.trim();
-
-  if (!cleanEmail) throw new Error('Please enter your email address.');
-  if (!cleanName) throw new Error('Please enter your full name.');
-  if (!password) throw new Error('Please enter your password.');
-  if (password.length < 6) throw new Error('Password must be at least 6 characters.');
+  console.log('[Firebase Auth] Calling createUserWithEmailAndPassword for:', cleanEmail);
 
   if (!auth) {
-    throw new Error('Firebase Authentication is currently unavailable. Please refresh.');
+    const err = new Error('Firebase Authentication is not initialized.');
+    (err as any).code = 'auth/not-initialized';
+    console.error('[Firebase Auth Error] Code:', (err as any).code, err.message);
+    throw err;
   }
 
-  // 1. Initialize auth persistence before login/sign-up (Requirement 2 & 3)
+  // Ensure persistence before sign-up
   await ensureAuthPersistence();
 
-  // 2. Create Firebase Authentication user (with auto-retry on quota error)
-  let userCredential;
   try {
-    userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-  } catch (err: any) {
-    const msg = String(err?.message || err || '');
-    if (msg.includes('quota') || msg.includes('QuotaExceeded') || msg.includes('auth/internal-error')) {
-      purgeOversizedCache();
+    const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+    const fbUser = userCredential.user;
+
+    // Update display name in Firebase Auth
+    if (cleanName) {
       try {
-        await ensureAuthPersistence();
-        userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-      } catch (retryErr: any) {
-        throw new Error(getFriendlyFirebaseAuthError(retryErr));
+        await updateProfile(fbUser, { displayName: cleanName });
+      } catch (profErr) {
+        console.warn('[Firebase Auth] updateProfile notice:', profErr);
       }
-    } else {
-      throw new Error(getFriendlyFirebaseAuthError(err));
     }
-  }
 
-  const fbUser = userCredential.user;
+    // 7. Verify that auth.currentUser is populated after creation
+    console.log('[Firebase Auth] Create account successful! Verified auth.currentUser:', {
+      uid: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      displayName: auth.currentUser?.displayName,
+      isPopulated: Boolean(auth.currentUser),
+    });
 
-  // 3. Set Firebase displayName
-  try {
-    await updateProfile(fbUser, { displayName: cleanName });
-  } catch {}
+    // 11. If email == "zkdubbingstudio@gmail.com", assign owner role and allow /admin
+    const isOwnerUser = isAuthorizedAdmin(fbUser.email || cleanEmail);
+    const role: 'owner' | 'user' = isOwnerUser ? 'owner' : 'user';
+    const nowIso = new Date().toISOString();
+    const createdAtMs = Date.now();
 
-  const isOwnerUser = isAuthorizedAdmin(cleanEmail);
-  const role: 'owner' | 'user' = isOwnerUser ? 'owner' : 'user';
-  const nowIso = new Date().toISOString();
-  const createdAtMs = Date.now();
-
-  const userRecord: User = {
-    uid: fbUser.uid,
-    id: fbUser.uid,
-    email: cleanEmail,
-    name: cleanName,
-    displayName: cleanName,
-    full_name: cleanName,
-    photoURL: '',
-    profilePhoto: '',
-    role,
-    createdAt: createdAtMs,
-    lastLogin: nowIso,
-    settings: {
-      appearance: 'Dark',
-      defaultQuality: '1080p',
-      autoplayNext: true,
-      rememberPosition: true,
-      newEpisodeNotifications: true,
-    },
-  };
-
-  // 4. Create matching user profile in Supabase
-  try {
-    await supabase.from('users').upsert({
-      id: fbUser.uid,
+    const userRecord: User = {
       uid: fbUser.uid,
-      full_name: cleanName,
-      username: cleanName,
-      displayName: cleanName,
-      email: cleanEmail,
-      role: isOwnerUser ? 'owner' : 'user',
-      created_at: nowIso,
-      last_login: nowIso,
-    }, { onConflict: 'id' });
-  } catch (err) {
-    console.warn('Could not save user profile to Supabase users table:', err);
-  }
+      id: fbUser.uid,
+      email: fbUser.email || cleanEmail,
+      name: cleanName || fbUser.displayName || cleanEmail.split('@')[0],
+      displayName: cleanName || fbUser.displayName || cleanEmail.split('@')[0],
+      full_name: cleanName || fbUser.displayName || cleanEmail.split('@')[0],
+      photoURL: fbUser.photoURL || '',
+      profilePhoto: fbUser.photoURL || '',
+      role,
+      createdAt: createdAtMs,
+      lastLogin: nowIso,
+      settings: {
+        appearance: 'Dark',
+        defaultQuality: '1080p',
+        autoplayNext: true,
+        rememberPosition: true,
+        newEpisodeNotifications: true,
+      },
+    };
 
-  // 5. Mirror profile in Firestore
-  if (db) {
+    // Save profile in Supabase & Firestore in background
     try {
-      await setDoc(doc(db, 'users', fbUser.uid), {
+      await supabase.from('users').upsert({
+        id: fbUser.uid,
+        uid: fbUser.uid,
+        full_name: userRecord.displayName,
+        username: userRecord.displayName,
+        displayName: userRecord.displayName,
+        email: cleanEmail.toLowerCase(),
+        role,
+        created_at: nowIso,
+        last_login: nowIso,
+      }, { onConflict: 'id' });
+    } catch {}
+
+    if (db) {
+      setDoc(doc(db, 'users', fbUser.uid), {
         uid: fbUser.uid,
         id: fbUser.uid,
-        full_name: cleanName,
-        displayName: cleanName,
-        email: cleanEmail,
-        role: isOwnerUser ? 'owner' : 'user',
+        full_name: userRecord.displayName,
+        displayName: userRecord.displayName,
+        email: cleanEmail.toLowerCase(),
+        role,
         created_at: nowIso,
         createdAt: createdAtMs,
         last_login: nowIso,
         lastLogin: nowIso,
-      }, { merge: true });
-    } catch {}
-  }
-
-  // 6. Alert the owner (zkdubbingstudio@gmail.com) via real-time toast if a new user registered
-  if (!isOwnerUser) {
-    dispatchOwnerNotification({
-      type: 'new_user',
-      title: 'New User Registered',
-      details: `${cleanName} (${cleanEmail}) joined ZK Voice Hub`,
-      category: 'user',
-      userEmail: cleanEmail,
-      userName: cleanName,
-      actionUrl: '/admin/users',
-    }).catch(() => {});
-  }
-
-  return userRecord;
-}
-
-/**
- * 3. Sign In:
- * - Initializes auth persistence: await setPersistence(auth, browserLocalPersistence)
- * - Authenticates with Firebase Email + Password
- * - Auto-retries if storage quota exceeded
- * - Loads user profile from Supabase
- */
-export async function signInWithFirebase(
-  email: string,
-  password: string
-): Promise<User> {
-  const cleanEmail = email.trim().toLowerCase();
-  if (!cleanEmail) throw new Error('Please enter your email address.');
-  if (!password) throw new Error('Please enter your password.');
-
-  if (!auth) {
-    throw new Error('Firebase Authentication is currently unavailable. Please refresh.');
-  }
-
-  // 1. Initialize auth persistence before login (Requirement 2 & 3)
-  await ensureAuthPersistence();
-
-  // 2. Authenticate with Firebase (with auto-retry on quota error)
-  let userCredential;
-  try {
-    userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password);
-  } catch (err: any) {
-    const msg = String(err?.message || err || '');
-    if (msg.includes('quota') || msg.includes('QuotaExceeded') || msg.includes('auth/internal-error')) {
-      purgeOversizedCache();
-      try {
-        await ensureAuthPersistence();
-        userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password);
-      } catch (retryErr: any) {
-        throw new Error(getFriendlyFirebaseAuthError(retryErr));
-      }
-    } else {
-      throw new Error(getFriendlyFirebaseAuthError(err));
+      }, { merge: true }).catch(() => {});
     }
+
+    // Alert owner via toast if new user joins
+    if (!isOwnerUser) {
+      dispatchOwnerNotification({
+        type: 'new_user',
+        title: 'New User Registered',
+        details: `${cleanName} (${cleanEmail}) joined ZK Voice Hub`,
+        category: 'user',
+        userEmail: cleanEmail,
+        userName: cleanName,
+        actionUrl: '/admin/users',
+      }).catch(() => {});
+    }
+
+    return userRecord;
+  } catch (err: any) {
+    // 2. Log the exact Firebase error code to the console
+    console.error('[Firebase Auth Error] createUserWithEmailAndPassword failed:', {
+      code: err?.code,
+      message: err?.message,
+      name: err?.name,
+      stack: err?.stack,
+    });
+    // 3. Throw original Firebase error without replacing it
+    throw err;
   }
-
-  const fbUser = userCredential.user;
-
-  // 3. Load user profile from Supabase
-  return await loadUserProfileFromSupabase(fbUser.uid, cleanEmail, fbUser.displayName);
 }
 
 /**
- * 4. Forgot Password:
- * - Sends Firebase password reset email
+ * 3. Forgot Password with Firebase:
+ * - Direct call to sendPasswordResetEmail()
+ * - Logs exact Firebase error code to console
+ * - Does not replace or mask original Firebase error
  */
 export async function sendFirebasePasswordReset(email: string): Promise<void> {
-  const cleanEmail = email.trim().toLowerCase();
-  if (!cleanEmail) throw new Error('Please enter your email address.');
+  const cleanEmail = email.trim();
+  console.log('[Firebase Auth] Calling sendPasswordResetEmail for:', cleanEmail);
 
   if (!auth) {
-    throw new Error('Firebase Authentication is currently unavailable. Please refresh.');
+    const err = new Error('Firebase Authentication is not initialized.');
+    (err as any).code = 'auth/not-initialized';
+    console.error('[Firebase Auth Error] Code:', (err as any).code, err.message);
+    throw err;
   }
 
   try {
     await sendPasswordResetEmail(auth, cleanEmail);
+    console.log('[Firebase Auth] sendPasswordResetEmail SUCCESS for:', cleanEmail);
   } catch (err: any) {
-    throw new Error(getFriendlyFirebaseAuthError(err));
+    console.error('[Firebase Auth Error] sendPasswordResetEmail failed:', {
+      code: err?.code,
+      message: err?.message,
+      name: err?.name,
+      stack: err?.stack,
+    });
+    throw err;
   }
 }
 
@@ -396,15 +405,16 @@ export async function signOutUser(): Promise<void> {
   if (auth) {
     try {
       await signOut(auth);
-    } catch (err) {
-      console.warn('Notice during Firebase signOut:', err);
+      console.log('[Firebase Auth] signOut SUCCESS');
+    } catch (err: any) {
+      console.error('[Firebase Auth Error] signOut notice:', err?.code, err?.message);
     }
   }
 }
 
 /**
  * Retrieves the current session user directly from Firebase Auth
- * Never reads from localStorage (Requirement 7)
+ * Never reads from localStorage (Requirement 5)
  */
 export async function getActiveAuthUser(): Promise<User | null> {
   if (auth?.currentUser) {
@@ -416,15 +426,3 @@ export async function getActiveAuthUser(): Promise<User | null> {
   }
   return null;
 }
-
-// Backward-compatible alias for any callers
-export const authenticateWithEmailPassword = async (
-  email: string,
-  password: string,
-  isExplicitCreate: boolean = false
-): Promise<User> => {
-  if (isExplicitCreate) {
-    return await signUpWithFirebase(email, password, email.split('@')[0]);
-  }
-  return await signInWithFirebase(email, password);
-};

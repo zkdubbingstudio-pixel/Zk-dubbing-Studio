@@ -14,9 +14,6 @@ import {
 import { initializeFirestore, getFirestore, setLogLevel, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-export const PRODUCTION_DOMAIN = 'zk-voicehub.vercel.app';
-export const PRODUCTION_ORIGIN = 'https://zk-voicehub.vercel.app';
-
 // Silence internal Firestore connection logs & timeout warnings in console
 try {
   setLogLevel('silent');
@@ -48,61 +45,23 @@ export function purgeOversizedCache(): void {
   } catch {}
 }
 
-// Automatically clean non-essential caches on module evaluation
 purgeOversizedCache();
 
-// Dynamically resolve authDomain to use production domain on Vercel
-export function getResolvedAuthDomain(): string {
-  if (typeof window !== 'undefined') {
-    const host = window.location.hostname.toLowerCase();
-    if (host.includes('vercel.app') || host === PRODUCTION_DOMAIN) {
-      return PRODUCTION_DOMAIN;
-    }
-  }
-  return firebaseConfig.authDomain || 'gen-lang-client-0843629033.firebaseapp.com';
-}
+// 1. Initialize Firebase App strictly once using the exact firebaseConfig (Requirement 8 & 9)
+export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-const activeFirebaseConfig = {
-  ...firebaseConfig,
-  authDomain: getResolvedAuthDomain(),
-};
+// 2. Initialize Firebase Auth strictly once (Requirement 9)
+export const auth = getAuth(app);
 
-// Initialize Firebase App only once (Singleton pattern) safely
-let firebaseApp: any = null;
-try {
-  if (getApps().length === 0) {
-    firebaseApp = initializeApp(activeFirebaseConfig);
-  } else {
-    firebaseApp = getApp();
-  }
-} catch (err) {
-  console.warn('Firebase App initialization warning:', err);
-  try {
-    firebaseApp = getApp();
-  } catch {
-    firebaseApp = null;
-  }
+// 3. Set persistence to browserLocalPersistence (Requirement 6)
+if (typeof window !== 'undefined') {
+  setPersistence(auth, browserLocalPersistence).catch((err) => {
+    console.warn('[Firebase Auth] Persistence initialization notice:', err);
+  });
 }
-export const app = firebaseApp;
-
-// Initialize Auth safely
-let firebaseAuth: any = null;
-try {
-  if (app) {
-    firebaseAuth = getAuth(app);
-    setPersistence(firebaseAuth, browserLocalPersistence).catch((err) => {
-      purgeOversizedCache();
-      setPersistence(firebaseAuth, browserLocalPersistence).catch(() => {});
-    });
-  }
-} catch (e) {
-  console.warn('Firebase Auth initialization warning:', e);
-}
-export const auth = firebaseAuth;
 
 /**
- * Initializes and confirms browserLocalPersistence before any login or sign-up.
- * If quota is exceeded, automatically purges old cache and retries.
+ * Ensures persistence before critical auth calls, auto-purging old caches if storage quota is hit
  */
 export async function ensureAuthPersistence(): Promise<void> {
   if (!auth) return;
@@ -115,7 +74,7 @@ export async function ensureAuthPersistence(): Promise<void> {
       try {
         await setPersistence(auth, browserLocalPersistence);
       } catch (retryErr) {
-        console.warn('Retry setPersistence warning:', retryErr);
+        console.warn('[Firebase Auth] Retry setPersistence notice:', retryErr);
       }
     }
   }

@@ -12,6 +12,7 @@ import {
   isAuthorizedAdmin, 
   PRIMARY_ADMIN_EMAIL 
 } from '../lib/authService';
+import { auth } from '../lib/firebase';
 import { logAdminActivity } from '../lib/activityLogger';
 import OwnerToastContainer from '../components/OwnerToastContainer';
 import OwnerNotificationCenter from '../components/OwnerNotificationCenter';
@@ -39,8 +40,9 @@ export default function AdminLayout() {
   const [notifCenterOpen, setNotifCenterOpen] = useState(false);
   const { unreadCount } = useOwnerNotificationsStore();
 
-  const currentUser = user;
-  const isAdmin = Boolean(currentUser?.email && isAuthorizedAdmin(currentUser.email));
+  const userEmail = user?.email || auth?.currentUser?.email;
+  const isAdmin = Boolean(userEmail && isAuthorizedAdmin(userEmail));
+  const currentUser = user || (userEmail ? { email: userEmail, uid: auth?.currentUser?.uid || '' } : null);
 
   // Subscribe to real-time owner notifications
   useEffect(() => {

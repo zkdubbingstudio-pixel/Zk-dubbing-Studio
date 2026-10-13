@@ -96,10 +96,18 @@ export default function AuthModal() {
       setEmail('');
       setPassword('');
 
-      // Redirect to Home page as specified
+      // Redirect to Home immediately (Requirement 10)
       navigate('/', { replace: true });
     } catch (err: any) {
-      setError(err?.message || 'Failed to sign in. Please check your credentials.');
+      // 2. Log exact Firebase error code to console & 12. Report exact Firebase error code
+      const fbCode = err?.code || 'auth/unknown';
+      const fbMsg = err?.message || String(err || '');
+      console.error('[Firebase Auth Error - Sign In]', {
+        code: fbCode,
+        message: fbMsg,
+        error: err,
+      });
+      setError(err?.code ? `[${err.code}] ${fbMsg}` : fbMsg);
     } finally {
       setIsLoading(false);
     }
@@ -125,10 +133,7 @@ export default function AuthModal() {
       setError('Please enter a password.');
       return;
     }
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters long.');
-      return;
-    }
+    // Custom password length checks removed (Requirement 4) - Firebase Authentication handles validation
     if (password !== confirmPassword) {
       setError('Passwords do not match. Please verify both passwords match.');
       return;
@@ -151,10 +156,18 @@ export default function AuthModal() {
       setPassword('');
       setConfirmPassword('');
 
-      // Redirect to Home page as specified
+      // Redirect to Home immediately (Requirement 10)
       navigate('/', { replace: true });
     } catch (err: any) {
-      setError(err?.message || 'Could not create account. Please check your details.');
+      // 2. Log exact Firebase error code to console & 12. Report exact Firebase error code
+      const fbCode = err?.code || 'auth/unknown';
+      const fbMsg = err?.message || String(err || '');
+      console.error('[Firebase Auth Error - Create Account]', {
+        code: fbCode,
+        message: fbMsg,
+        error: err,
+      });
+      setError(err?.code ? `[${err.code}] ${fbMsg}` : fbMsg);
     } finally {
       setIsLoading(false);
     }
@@ -177,7 +190,14 @@ export default function AuthModal() {
       await sendFirebasePasswordReset(cleanEmail);
       setResetSuccess(true);
     } catch (err: any) {
-      setError(err?.message || 'Could not send password reset email. Please try again.');
+      const fbCode = err?.code || 'auth/unknown';
+      const fbMsg = err?.message || String(err || '');
+      console.error('[Firebase Auth Error - Forgot Password]', {
+        code: fbCode,
+        message: fbMsg,
+        error: err,
+      });
+      setError(err?.code ? `[${err.code}] ${fbMsg}` : fbMsg);
     } finally {
       setIsLoading(false);
     }
@@ -431,9 +451,8 @@ export default function AuthModal() {
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="At least 6 characters"
+                  placeholder="Enter password"
                   required
-                  minLength={6}
                   autoComplete="new-password"
                   className="w-full pl-10 pr-10 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 text-sm focus:outline-none focus:border-[#00e5ff] focus:ring-1 focus:ring-[#00e5ff] transition-all"
                 />
@@ -463,7 +482,6 @@ export default function AuthModal() {
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Re-enter password"
                   required
-                  minLength={6}
                   autoComplete="new-password"
                   className="w-full pl-10 pr-10 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 text-sm focus:outline-none focus:border-[#00e5ff] focus:ring-1 focus:ring-[#00e5ff] transition-all"
                 />
