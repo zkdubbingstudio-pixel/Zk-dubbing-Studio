@@ -1,11 +1,15 @@
 import { 
   auth, 
+  db,
+  ensureAuthPersistence,
+  purgeOversizedCache,
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
   signOut, 
   sendPasswordResetEmail, 
   updateProfile 
 } from './firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { supabase } from './supabase';
 import { User } from '../types';
 import { dispatchOwnerNotification } from './ownerNotificationService';
@@ -65,7 +69,8 @@ export function getFriendlyFirebaseAuthError(error: any): string {
 }
 
 /**
- * Loads and syncs user profile from Supabase database
+ * Loads user profile from Supabase database (with resilient fallback to Firestore).
+ * Does NOT write to localStorage or sessionStorage.
  */
 export async function loadUserProfileFromSupabase(
   uid: string,
@@ -78,19 +83,41 @@ export async function loadUserProfileFromSupabase(
   const nowIso = new Date().toISOString();
 
   let profileData: any = null;
+
+  // 1. Fetch from Supabase users table safely
   try {
     const { data, error } = await supabase
       .from('users')
       .select('*')
-      .or(`id.eq.${uid},uid.eq.${uid},email.eq.${cleanEmail}`)
-      .limit(1)
+      .eq('id', uid)
       .maybeSingle();
 
     if (!error && data) {
       profileData = data;
+    } else if (cleanEmail) {
+      const emailQuery = await supabase
+        .from('users')
+        .select('*')
+        .eq('email', cleanEmail)
+        .maybeSingle();
+      if (!emailQuery.error && emailQuery.data) {
+        profileData = emailQuery.data;
+      }
     }
   } catch (err) {
-    console.warn('Supabase fetch profile warning:', err);
+    console.warn('Supabase fetch profile notice:', err);
+  }
+
+  // 2. Resilient fallback: fetch from Firestore if Supabase had no row
+  if (!profileData && db) {
+    try {
+      const snap = await getDoc(doc(db, 'users', uid));
+      if (snap.exists()) {
+        profileData = snap.data();
+      }
+    } catch (fsErr) {
+      console.warn('Firestore fallback fetch notice:', fsErr);
+    }
   }
 
   const displayName =
@@ -110,7 +137,9 @@ export async function loadUserProfileFromSupabase(
     photoURL: profileData?.photo_url || profileData?.photoURL || '',
     profilePhoto: profileData?.photo_url || profileData?.profilePhoto || '',
     role: isOwnerUser ? 'owner' : (profileData?.role === 'admin' || profileData?.role === 'owner' ? 'owner' : 'user'),
-    createdAt: profileData?.created_at ? new Date(profileData.created_at).getTime() : Date.now(),
+    createdAt: profileData?.created_at
+      ? (typeof profileData.created_at === 'number' ? profileData.created_at : new Date(profileData.created_at).getTime())
+      : Date.now(),
     lastLogin: nowIso,
     settings: profileData?.settings || {
       appearance: 'Dark',
@@ -121,46 +150,52 @@ export async function loadUserProfileFromSupabase(
     },
   };
 
-  // If user profile exists in Supabase, update last_login
-  if (profileData) {
-    try {
-      await supabase
-        .from('users')
-        .update({ last_login: nowIso })
-        .eq('id', profileData.id || uid);
-    } catch {}
-  } else {
-    // If not found in Supabase yet, create matching user profile in Supabase
-    try {
-      await supabase.from('users').upsert({
-        id: uid,
-        uid: uid,
-        full_name: displayName,
-        username: displayName,
-        displayName: displayName,
-        email: cleanEmail,
-        role: isOwnerUser ? 'owner' : 'user',
-        created_at: nowIso,
-        last_login: nowIso,
-      }, { onConflict: 'id' });
-    } catch (err) {
-      console.warn('Could not insert profile into Supabase:', err);
-    }
+  // 3. Keep profile updated in Supabase
+  try {
+    const supabasePayload = {
+      id: uid,
+      uid: uid,
+      full_name: displayName,
+      username: displayName,
+      displayName: displayName,
+      email: cleanEmail,
+      role: isOwnerUser ? 'owner' : 'user',
+      created_at: profileData?.created_at || nowIso,
+      last_login: nowIso,
+    };
+    await supabase.from('users').upsert(supabasePayload, { onConflict: 'id' });
+  } catch (err) {
+    console.warn('Could not update profile in Supabase:', err);
   }
 
-  // Fast localStorage hydration cache
-  try {
-    localStorage.setItem('zk_auth_user', JSON.stringify(userRecord));
-  } catch {}
+  // 4. Mirror in Firestore for database reliability
+  if (db) {
+    try {
+      await setDoc(doc(db, 'users', uid), {
+        uid,
+        id: uid,
+        full_name: displayName,
+        displayName,
+        email: cleanEmail,
+        role: isOwnerUser ? 'owner' : 'user',
+        created_at: profileData?.created_at || nowIso,
+        createdAt: userRecord.createdAt,
+        last_login: nowIso,
+        lastLogin: nowIso,
+      }, { merge: true });
+    } catch {}
+  }
 
   return userRecord;
 }
 
 /**
  * 2. Create Account:
+ * - Initializes auth persistence: await setPersistence(auth, browserLocalPersistence)
  * - Creates user in Firebase Authentication
  * - Sets displayName
  * - Creates matching user profile in Supabase (uid, full_name, email, role = "user" | "owner", created_at, last_login)
+ * - Auto-retries if storage quota exceeded
  * - Alerts owner via toast
  */
 export async function signUpWithFirebase(
@@ -180,17 +215,31 @@ export async function signUpWithFirebase(
     throw new Error('Firebase Authentication is currently unavailable. Please refresh.');
   }
 
-  // 1. Create Firebase Authentication user
+  // 1. Initialize auth persistence before login/sign-up (Requirement 2 & 3)
+  await ensureAuthPersistence();
+
+  // 2. Create Firebase Authentication user (with auto-retry on quota error)
   let userCredential;
   try {
     userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
   } catch (err: any) {
-    throw new Error(getFriendlyFirebaseAuthError(err));
+    const msg = String(err?.message || err || '');
+    if (msg.includes('quota') || msg.includes('QuotaExceeded') || msg.includes('auth/internal-error')) {
+      purgeOversizedCache();
+      try {
+        await ensureAuthPersistence();
+        userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+      } catch (retryErr: any) {
+        throw new Error(getFriendlyFirebaseAuthError(retryErr));
+      }
+    } else {
+      throw new Error(getFriendlyFirebaseAuthError(err));
+    }
   }
 
   const fbUser = userCredential.user;
 
-  // 2. Set Firebase displayName
+  // 3. Set Firebase displayName
   try {
     await updateProfile(fbUser, { displayName: cleanName });
   } catch {}
@@ -221,8 +270,7 @@ export async function signUpWithFirebase(
     },
   };
 
-  // 3. Create matching user profile in Supabase
-  // Required fields: uid, full_name, email, role, created_at, last_login
+  // 4. Create matching user profile in Supabase
   try {
     await supabase.from('users').upsert({
       id: fbUser.uid,
@@ -239,12 +287,25 @@ export async function signUpWithFirebase(
     console.warn('Could not save user profile to Supabase users table:', err);
   }
 
-  // Local storage cache for instant hydration
-  try {
-    localStorage.setItem('zk_auth_user', JSON.stringify(userRecord));
-  } catch {}
+  // 5. Mirror profile in Firestore
+  if (db) {
+    try {
+      await setDoc(doc(db, 'users', fbUser.uid), {
+        uid: fbUser.uid,
+        id: fbUser.uid,
+        full_name: cleanName,
+        displayName: cleanName,
+        email: cleanEmail,
+        role: isOwnerUser ? 'owner' : 'user',
+        created_at: nowIso,
+        createdAt: createdAtMs,
+        last_login: nowIso,
+        lastLogin: nowIso,
+      }, { merge: true });
+    } catch {}
+  }
 
-  // 4. Alert the owner (zkdubbingstudio@gmail.com) via real-time toast if a new user registered
+  // 6. Alert the owner (zkdubbingstudio@gmail.com) via real-time toast if a new user registered
   if (!isOwnerUser) {
     dispatchOwnerNotification({
       type: 'new_user',
@@ -262,7 +323,9 @@ export async function signUpWithFirebase(
 
 /**
  * 3. Sign In:
+ * - Initializes auth persistence: await setPersistence(auth, browserLocalPersistence)
  * - Authenticates with Firebase Email + Password
+ * - Auto-retries if storage quota exceeded
  * - Loads user profile from Supabase
  */
 export async function signInWithFirebase(
@@ -277,17 +340,31 @@ export async function signInWithFirebase(
     throw new Error('Firebase Authentication is currently unavailable. Please refresh.');
   }
 
-  // 1. Authenticate with Firebase
+  // 1. Initialize auth persistence before login (Requirement 2 & 3)
+  await ensureAuthPersistence();
+
+  // 2. Authenticate with Firebase (with auto-retry on quota error)
   let userCredential;
   try {
     userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password);
   } catch (err: any) {
-    throw new Error(getFriendlyFirebaseAuthError(err));
+    const msg = String(err?.message || err || '');
+    if (msg.includes('quota') || msg.includes('QuotaExceeded') || msg.includes('auth/internal-error')) {
+      purgeOversizedCache();
+      try {
+        await ensureAuthPersistence();
+        userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      } catch (retryErr: any) {
+        throw new Error(getFriendlyFirebaseAuthError(retryErr));
+      }
+    } else {
+      throw new Error(getFriendlyFirebaseAuthError(err));
+    }
   }
 
   const fbUser = userCredential.user;
 
-  // 2. Load user profile from Supabase
+  // 3. Load user profile from Supabase
   return await loadUserProfileFromSupabase(fbUser.uid, cleanEmail, fbUser.displayName);
 }
 
@@ -312,48 +389,35 @@ export async function sendFirebasePasswordReset(email: string): Promise<void> {
 
 /**
  * Unified Sign Out:
- * - Signs out from Firebase Authentication
- * - Clears session cache
+ * - Signs out cleanly from Firebase Authentication
+ * - Does NOT use custom storage keys
  */
 export async function signOutUser(): Promise<void> {
-  try {
-    localStorage.removeItem('zk_auth_user');
-    if (auth) {
+  if (auth) {
+    try {
       await signOut(auth);
+    } catch (err) {
+      console.warn('Notice during Firebase signOut:', err);
     }
-  } catch (err) {
-    console.warn('Notice during Firebase signOut:', err);
   }
 }
 
 /**
- * Retrieves the current session user from Firebase Auth / Supabase or fast localStorage cache
+ * Retrieves the current session user directly from Firebase Auth
+ * Never reads from localStorage (Requirement 7)
  */
 export async function getActiveAuthUser(): Promise<User | null> {
-  try {
-    // 1. Fast cache for instant first paint
-    const raw = localStorage.getItem('zk_auth_user');
-    let cachedUser: User | null = null;
-    if (raw) {
-      cachedUser = JSON.parse(raw);
-    }
-
-    // 2. If Firebase current user exists
-    if (auth?.currentUser) {
-      return await loadUserProfileFromSupabase(
-        auth.currentUser.uid,
-        auth.currentUser.email,
-        auth.currentUser.displayName || cachedUser?.displayName
-      );
-    }
-
-    return cachedUser;
-  } catch {
-    return null;
+  if (auth?.currentUser) {
+    return await loadUserProfileFromSupabase(
+      auth.currentUser.uid,
+      auth.currentUser.email,
+      auth.currentUser.displayName
+    );
   }
+  return null;
 }
 
-// Backward-compatible alias for any existing callers
+// Backward-compatible alias for any callers
 export const authenticateWithEmailPassword = async (
   email: string,
   password: string,

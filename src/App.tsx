@@ -6,7 +6,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, lazy, Suspense } from 'react';
 import { useAuthStore } from './store/authStore';
 import { auth, onAuthStateChanged } from './lib/firebase';
-import { getActiveAuthUser, loadUserProfileFromSupabase } from './lib/authService';
+import { loadUserProfileFromSupabase } from './lib/authService';
 
 import RootLayout from './layouts/RootLayout';
 import AdminLayout from './layouts/AdminLayout';
@@ -45,19 +45,7 @@ export default function App() {
   const { setUser, setFirebaseUser, setLoading } = useAuthStore();
 
   useEffect(() => {
-    // 1. Initial fast user hydration from cached profile
-    getActiveAuthUser()
-      .then((user) => {
-        if (user) {
-          setUser(user);
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        setLoading(false);
-      });
-
-    // 2. Firebase real-time auth state listener (keeps user logged in across refresh)
+    // On app start: ONLY use Firebase onAuthStateChanged() (Requirement 6 & 7)
     let unsubscribe: (() => void) | undefined;
     if (auth) {
       unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
@@ -79,6 +67,8 @@ export default function App() {
         }
         setLoading(false);
       });
+    } else {
+      setLoading(false);
     }
 
     return () => {

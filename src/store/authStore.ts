@@ -1,12 +1,5 @@
 import { create } from 'zustand';
-import { User as FirebaseUser } from 'firebase/auth';
 import { User } from '../types';
-
-let initialCachedUser: User | null = null;
-try {
-  const raw = localStorage.getItem('zk_auth_user');
-  if (raw) initialCachedUser = JSON.parse(raw);
-} catch {}
 
 interface AuthState {
   user: User | null;
@@ -26,21 +19,14 @@ interface AuthState {
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
-  user: initialCachedUser,
+  user: null,
   firebaseUser: null,
-  loading: initialCachedUser ? false : true,
+  loading: true,
   isSigningIn: false,
   authError: null,
   authSuccessMessage: null,
   isAuthModalOpen: false,
-  setUser: (user) => {
-    if (user) {
-      try { localStorage.setItem('zk_auth_user', JSON.stringify(user)); } catch {}
-    } else {
-      try { localStorage.removeItem('zk_auth_user'); } catch {}
-    }
-    set({ user });
-  },
+  setUser: (user) => set({ user }),
   setFirebaseUser: (firebaseUser) => set({ firebaseUser }),
   setLoading: (loading) => set({ loading }),
   setIsSigningIn: (isSigningIn) => set({ isSigningIn }),
@@ -48,4 +34,3 @@ export const useAuthStore = create<AuthState>((set) => ({
   setAuthSuccessMessage: (authSuccessMessage) => set({ authSuccessMessage }),
   setAuthModalOpen: (isAuthModalOpen) => set({ isAuthModalOpen }),
 }));
-

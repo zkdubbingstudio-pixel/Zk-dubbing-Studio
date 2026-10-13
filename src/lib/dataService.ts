@@ -435,6 +435,8 @@ export function normalizeEpisodeDoc(
   };
 }
 
+const inMemoryBackups: BackupRecord[] = [];
+
 // Automatic backup creation before any write/update/delete operation
 export async function createAutoBackup(type: 'anime' | 'season' | 'episode' | 'bulk', entityId: string, currentData: any): Promise<void> {
   try {
@@ -446,13 +448,9 @@ export async function createAutoBackup(type: 'anime' | 'season' | 'episode' | 'b
       timestamp: Date.now(),
     };
 
-    // 1. Save in localStorage for instant recovery
-    const backupsRaw = localStorage.getItem('zk_auto_backups');
-    let list: BackupRecord[] = backupsRaw ? JSON.parse(backupsRaw) : [];
-    if (!Array.isArray(list)) list = [];
-    list.unshift(backupObj);
-    if (list.length > 50) list = list.slice(0, 50);
-    localStorage.setItem('zk_auto_backups', JSON.stringify(list));
+    // 1. Keep in-memory backup reference without exhausting localStorage quota
+    inMemoryBackups.unshift(backupObj);
+    if (inMemoryBackups.length > 30) inMemoryBackups.pop();
 
     // 2. Save in Supabase backups table
     await supabase.from('backups').insert({

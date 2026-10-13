@@ -30,29 +30,15 @@ export default function Settings() {
   const isSignedIn = Boolean(currentUser);
 
   const [displayName, setDisplayName] = useState(() => {
-    if (user?.name || user?.displayName) return (user.name || user.displayName);
-    try {
-      const saved = localStorage.getItem('zk_visitor_settings');
-      if (saved) return JSON.parse(saved).displayName || '';
-    } catch {}
-    return '';
+    return user?.name || user?.displayName || '';
   });
 
   const [photoURL, setPhotoURL] = useState(() => {
-    if (user?.profilePhoto || user?.photoURL) return (user.profilePhoto || user.photoURL);
-    try {
-      const saved = localStorage.getItem('zk_visitor_settings');
-      if (saved) return JSON.parse(saved).photoURL || '';
-    } catch {}
-    return '';
+    return user?.profilePhoto || user?.photoURL || '';
   });
 
   const [settings, setSettings] = useState<UserSettings>(() => {
     if (user?.settings) return user.settings;
-    try {
-      const saved = localStorage.getItem('zk_visitor_settings');
-      if (saved && JSON.parse(saved).settings) return JSON.parse(saved).settings;
-    } catch {}
     return {
       appearance: 'Dark', // Default ON
       defaultQuality: 'Auto',
@@ -103,14 +89,6 @@ export default function Settings() {
         } catch {}
         
         setUser(updatedUser);
-      } else {
-        try {
-          localStorage.setItem('zk_visitor_settings', JSON.stringify({
-            displayName,
-            photoURL,
-            settings
-          }));
-        } catch {}
       }
       
       setSaveSuccess(true);

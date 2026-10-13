@@ -22,6 +22,35 @@ try {
   setLogLevel('silent');
 } catch {}
 
+/**
+ * Clean up old non-essential caches from localStorage so Firebase Auth storage quota is never exceeded
+ */
+export function purgeOversizedCache(): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    const toRemove: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (key && (
+        key.startsWith('zk_auth') ||
+        key.startsWith('zk_cache_') ||
+        key.startsWith('zk_auto_backups') ||
+        key.startsWith('zk_admin_activity') ||
+        key.startsWith('zk_visitor_') ||
+        key.includes('backup')
+      )) {
+        toRemove.push(key);
+      }
+    }
+    toRemove.forEach((k) => {
+      try { window.localStorage.removeItem(k); } catch {}
+    });
+  } catch {}
+}
+
+// Automatically clean non-essential caches on module evaluation
+purgeOversizedCache();
+
 // Dynamically resolve authDomain to use production domain on Vercel
 export function getResolvedAuthDomain(): string {
   if (typeof window !== 'undefined') {
@@ -61,15 +90,36 @@ let firebaseAuth: any = null;
 try {
   if (app) {
     firebaseAuth = getAuth(app);
-    // Guarantee persistent login across page refresh and browser sessions
     setPersistence(firebaseAuth, browserLocalPersistence).catch((err) => {
-      console.warn('Firebase setPersistence warning:', err);
+      purgeOversizedCache();
+      setPersistence(firebaseAuth, browserLocalPersistence).catch(() => {});
     });
   }
 } catch (e) {
   console.warn('Firebase Auth initialization warning:', e);
 }
 export const auth = firebaseAuth;
+
+/**
+ * Initializes and confirms browserLocalPersistence before any login or sign-up.
+ * If quota is exceeded, automatically purges old cache and retries.
+ */
+export async function ensureAuthPersistence(): Promise<void> {
+  if (!auth) return;
+  try {
+    await setPersistence(auth, browserLocalPersistence);
+  } catch (err: any) {
+    const msg = String(err?.message || err || '');
+    if (msg.includes('quota') || msg.includes('QuotaExceeded') || msg.includes('auth/internal-error')) {
+      purgeOversizedCache();
+      try {
+        await setPersistence(auth, browserLocalPersistence);
+      } catch (retryErr) {
+        console.warn('Retry setPersistence warning:', retryErr);
+      }
+    }
+  }
+}
 
 // Initialize Firestore safely
 let firestoreDb: any = null;
@@ -90,6 +140,7 @@ export const db = firestoreDb;
 
 export { 
   browserLocalPersistence,
+  setPersistence,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
@@ -101,11 +152,5 @@ export {
 
 // Test connection on boot non-blocking and safe
 if (firestoreDb) {
-  getDocFromServer(doc(firestoreDb, 'test', 'connection')).catch((error) => {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn("Firebase client is currently offline; operating in offline persistence mode.");
-    }
-  });
+  getDocFromServer(doc(firestoreDb, 'test', 'connection')).catch(() => {});
 }
-
-

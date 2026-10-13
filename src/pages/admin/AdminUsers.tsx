@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
+import { db } from '../../lib/firebase';
+import { collection, getDocs } from 'firebase/firestore';
 import { 
   Users, Search as SearchIcon, Trash2, Ban, CheckCircle, 
   Edit2, X, Save, History, Clock, Film, Play, UserCheck, 
@@ -39,7 +41,7 @@ export default function AdminUsers() {
       setError(null);
       const userList: User[] = [];
 
-      // Fetch from Supabase users table
+      // 1. Fetch from Supabase users table
       try {
         const { data: sData } = await supabase
           .from('users')
@@ -53,7 +55,7 @@ export default function AdminUsers() {
               uid: su.id,
               id: su.id,
               email: su.email || '',
-              displayName: su.username || su.displayName || 'Anime Fan',
+              displayName: su.full_name || su.username || su.displayName || 'Anime Fan',
               photoURL: su.photo_url || su.photoURL || su.avatar_url || '',
               role: isOwner ? 'owner' : 'user',
               isBanned: Boolean(su.is_banned || su.isBanned),
@@ -66,10 +68,37 @@ export default function AdminUsers() {
         console.warn('Supabase users fetch warning:', sErr);
       }
 
+      // 2. Fallback to Firestore users if Supabase returned no users
+      if (userList.length === 0 && db) {
+        try {
+          const snapshot = await getDocs(collection(db, 'users'));
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            const email = (data.email || '').toLowerCase();
+            const isOwner = email === 'zkdubbingstudio@gmail.com' || data.role === 'owner';
+            userList.push({
+              uid: docSnap.id,
+              id: docSnap.id,
+              email: data.email || '',
+              displayName: data.full_name || data.displayName || data.username || 'Anime Fan',
+              photoURL: data.photoURL || data.profilePhoto || '',
+              role: isOwner ? 'owner' : 'user',
+              isBanned: Boolean(data.isBanned),
+              createdAt: data.createdAt
+                ? (typeof data.createdAt === 'number' ? data.createdAt : new Date(data.createdAt).getTime())
+                : Date.now(),
+              settings: data.settings,
+            });
+          });
+        } catch (fErr) {
+          console.warn('Firestore fallback fetch warning:', fErr);
+        }
+      }
+
       if (userList.length > 0) {
         setUsers(userList);
       } else {
-        // Fallback user list if no users registered yet
+        // Fallback owner account if no other accounts registered yet
         setUsers([
           {
             uid: 'admin-zk',
