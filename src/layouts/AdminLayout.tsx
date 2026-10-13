@@ -8,13 +8,14 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { 
-  signInWithGoogle, 
   signOutUser, 
   isAuthorizedAdmin, 
-  PRIMARY_ADMIN_EMAIL, 
-  getFriendlyAuthErrorMessage 
+  PRIMARY_ADMIN_EMAIL 
 } from '../lib/authService';
 import { logAdminActivity } from '../lib/activityLogger';
+import OwnerToastContainer from '../components/OwnerToastContainer';
+import OwnerNotificationCenter from '../components/OwnerNotificationCenter';
+import { subscribeToOwnerNotifications, useOwnerNotificationsStore } from '../lib/ownerNotificationService';
 
 const navItems = [
   { path: '/admin', label: 'Dashboard', icon: LayoutDashboard },
@@ -35,51 +36,28 @@ export default function AdminLayout() {
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showFabModal, setShowFabModal] = useState(false);
-  const [isSigningIn, setIsSigningIn] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [notifCenterOpen, setNotifCenterOpen] = useState(false);
+  const { unreadCount } = useOwnerNotificationsStore();
 
-  // Close mobile drawer on route change
+  const currentUser = user;
+  const isAdmin = Boolean(currentUser?.email && isAuthorizedAdmin(currentUser.email));
+
+  // Subscribe to real-time owner notifications
   useEffect(() => {
-    setMobileMenuOpen(false);
-  }, [location.pathname]);
-
-  // Auto-dismiss auth success message
-  useEffect(() => {
-    if (authSuccessMessage) {
-      const timer = setTimeout(() => {
-        setAuthSuccessMessage(null);
-      }, 4000);
-      return () => clearTimeout(timer);
+    if (isAdmin && currentUser?.email) {
+      const unsubscribe = subscribeToOwnerNotifications(currentUser.email);
+      return () => {
+        unsubscribe();
+      };
     }
-  }, [authSuccessMessage, setAuthSuccessMessage]);
-
-  const isAdmin = Boolean(user && isAuthorizedAdmin(user.email));
-
-  const handleAdminGoogleLogin = async (preferRedirect = false) => {
-    setIsSigningIn(true);
-    setAuthError(null);
-    try {
-      const loggedUser = await signInWithGoogle({ preferRedirect });
-      if (loggedUser) {
-        logAdminActivity('Admin Logged In via Google', 'security', `Account: ${loggedUser.email}`);
-        setAuthSuccessMessage(`Administrator access verified for ${loggedUser.email}`);
-      }
-    } catch (err: any) {
-      if (err?.code !== 'auth/popup-closed-by-user') {
-        const msg = getFriendlyAuthErrorMessage(err);
-        setAuthError(msg);
-      }
-    } finally {
-      setIsSigningIn(false);
-    }
-  };
+  }, [isAdmin, currentUser?.email]);
 
   const handleLogout = async () => {
     try {
       await signOutUser();
     } catch {}
     setUser(null);
-    navigate('/login', { replace: true });
+    navigate('/', { replace: true });
   };
 
   if (loading) {
@@ -91,94 +69,59 @@ export default function AdminLayout() {
     );
   }
 
-  // Admin Gatekeeper Login UI
+  // Admin Gatekeeper Access Denied UI
   if (!isAdmin) {
-    const isLoggedNonAdmin = user && !isAdmin;
-
     return (
       <div className="min-h-screen bg-[#07090e] flex flex-col items-center justify-center p-4 relative overflow-hidden">
         {/* Ambient neon backdrops */}
-        <div className="absolute top-1/4 -left-20 w-96 h-96 bg-brand/15 rounded-full blur-[120px] pointer-events-none"></div>
-        <div className="absolute bottom-1/4 -right-20 w-96 h-96 bg-purple-600/15 rounded-full blur-[120px] pointer-events-none"></div>
+        <div className="absolute top-1/4 -left-20 w-96 h-96 bg-red-600/15 rounded-full blur-[140px] pointer-events-none"></div>
+        <div className="absolute bottom-1/4 -right-20 w-96 h-96 bg-brand/10 rounded-full blur-[140px] pointer-events-none"></div>
 
-        <div className="w-full max-w-md bg-black/60 border border-brand/40 rounded-3xl p-8 backdrop-blur-2xl shadow-[0_0_50px_rgba(0,229,255,0.2)] relative z-10 text-center">
-          <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-gradient-to-tr from-brand to-purple-500 p-0.5 shadow-[0_0_25px_rgba(0,229,255,0.4)]">
+        <div className="w-full max-w-md bg-black/70 border border-red-500/30 rounded-3xl p-8 backdrop-blur-2xl shadow-[0_0_50px_rgba(239,68,68,0.2)] relative z-10 text-center">
+          <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-gradient-to-tr from-red-500 to-rose-600 p-0.5 shadow-[0_0_30px_rgba(239,68,68,0.4)]">
             <div className="w-full h-full bg-[#0a0c14] rounded-2xl flex items-center justify-center overflow-hidden">
-              <img 
-                src="https://i.ibb.co/2Yp3CDq9/file-000000006f2c8211b20c6bedc9f9ac12.png" 
-                alt="ZK Logo" 
-                className="w-14 h-14 object-contain"
-              />
+              <ShieldAlert className="w-10 h-10 text-red-400" />
             </div>
           </div>
 
-          <h1 className="text-2xl font-black text-white tracking-tight mb-1">ZK Voice Hub</h1>
-          <p className="text-xs uppercase tracking-widest text-brand font-bold mb-6">Master Admin Portal</p>
+          <h1 className="text-3xl font-black text-white tracking-tight mb-2">Access Denied</h1>
+          <p className="text-xs uppercase tracking-widest text-red-400 font-bold mb-6">Restricted Administrator Area</p>
 
-          {isLoggedNonAdmin ? (
-            <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-2xl mb-6 text-left space-y-2">
-              <div className="flex items-center gap-2 text-xs font-bold text-red-400">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>Access Denied: Unauthorized Account</span>
-              </div>
-              <p className="text-xs text-white/70 leading-relaxed">
-                You are currently signed in as <span className="text-white font-mono font-bold">{user.email}</span>. This account does not have administrator privileges.
-              </p>
-              <p className="text-[11px] text-brand pt-1">
-                Authorized Admin: <span className="font-mono font-bold">{PRIMARY_ADMIN_EMAIL}</span>
-              </p>
+          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl mb-6 text-left space-y-2.5">
+            <div className="flex items-center gap-2 text-xs font-bold text-red-400">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>Authorization Required</span>
             </div>
-          ) : (
-            <div className="p-4 bg-white/5 border border-white/10 rounded-2xl mb-6 text-left space-y-2">
-              <div className="flex items-center gap-2 text-xs font-semibold text-white/80">
-                <ShieldCheck className="w-4 h-4 text-brand" />
-                <span>Authorized Administrator Account:</span>
-              </div>
-              <p className="text-xs font-mono text-cyan-300 bg-black/50 px-3 py-1.5 rounded-lg border border-brand/20">
-                {PRIMARY_ADMIN_EMAIL}
+            <p className="text-xs text-white/70 leading-relaxed">
+              This portal is restricted strictly to authorized administrative staff. Public access is disabled.
+            </p>
+            {currentUser?.email && (
+              <p className="text-xs text-white/50 pt-1 border-t border-white/5 font-mono">
+                Current Account: <span className="text-white font-bold">{currentUser.email}</span> (Unauthorized)
               </p>
+            )}
+            <div className="pt-2 border-t border-red-500/20 text-[11px] text-white/60">
+              Authorized Administrator: <span className="font-mono font-bold text-cyan-300">{PRIMARY_ADMIN_EMAIL}</span>
             </div>
-          )}
-
-          {authError && (
-            <div className="p-3 mb-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs font-medium text-left break-words">
-              {authError}
-            </div>
-          )}
+          </div>
 
           <div className="space-y-3">
-            <button
-              onClick={() => handleAdminGoogleLogin(false)}
-              disabled={isSigningIn}
-              className="w-full py-3 px-4 bg-brand text-black font-extrabold text-sm rounded-xl hover:bg-brand-hover transition-all shadow-[0_0_20px_rgba(0,229,255,0.4)] flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-            >
-              <Zap className="w-4 h-4" />
-              {isSigningIn ? 'Authenticating...' : isLoggedNonAdmin ? 'Switch to Admin Google Account' : 'Sign In with Admin Google Account'}
-            </button>
-
-            <button
-              onClick={() => handleAdminGoogleLogin(true)}
-              disabled={isSigningIn}
-              className="w-full py-2.5 px-4 bg-white/5 hover:bg-white/10 text-white/70 font-semibold text-xs rounded-xl border border-white/10 transition-colors flex items-center justify-center gap-2 cursor-pointer"
-            >
-              Android / Mobile Redirect Sign-In
-            </button>
-
-            {isLoggedNonAdmin && (
-              <button
-                onClick={handleLogout}
-                className="w-full py-2 text-xs text-red-400 hover:text-red-300 transition-colors font-bold cursor-pointer"
-              >
-                Sign Out Current Session
-              </button>
-            )}
-
             <Link
               to="/"
-              className="inline-block text-xs font-bold text-white/50 hover:text-white transition-colors pt-2"
+              className="w-full py-3.5 px-4 bg-brand text-black font-extrabold text-sm rounded-xl hover:bg-brand-hover transition-all shadow-[0_0_20px_rgba(0,229,255,0.3)] flex items-center justify-center gap-2"
             >
-              ← Return to Public Website
+              <Home className="w-4 h-4" />
+              Return to Website
             </Link>
+
+            {user && (
+              <button
+                onClick={handleLogout}
+                className="w-full py-2.5 text-xs text-red-400 hover:text-red-300 transition-colors font-bold cursor-pointer"
+              >
+                Sign Out Current Account
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -320,7 +263,22 @@ export default function AdminLayout() {
           </div>
 
           {/* Quick Actions & Admin Avatar */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            {/* Owner Live Notification Bell */}
+            <button
+              onClick={() => setNotifCenterOpen(true)}
+              className="relative p-2 rounded-xl bg-white/5 border border-white/10 hover:border-[#00e5ff]/40 text-white/80 hover:text-white transition-colors cursor-pointer"
+              aria-label="Owner Notifications"
+              title="Owner Notification Center"
+            >
+              <Bell className="w-4 h-4 text-[#00e5ff]" />
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 text-black text-[9px] font-black flex items-center justify-center animate-pulse shadow-[0_0_8px_#10b981]">
+                  {unreadCount}
+                </span>
+              )}
+            </button>
+
             <button
               onClick={() => setShowFabModal(true)}
               className="hidden sm:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-brand text-black font-extrabold text-xs hover:bg-brand-hover shadow-[0_0_15px_rgba(0,229,255,0.35)] transition-all cursor-pointer"
@@ -528,6 +486,15 @@ export default function AdminLayout() {
           </div>
         </div>
       )}
+
+      {/* Real-time Owner Toast Container */}
+      <OwnerToastContainer />
+
+      {/* Real-time Owner Notification Center Drawer */}
+      <OwnerNotificationCenter
+        isOpen={notifCenterOpen}
+        onClose={() => setNotifCenterOpen(false)}
+      />
     </div>
   );
 }

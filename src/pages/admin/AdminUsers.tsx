@@ -48,13 +48,14 @@ export default function AdminUsers() {
 
         if (sData && sData.length > 0) {
           sData.forEach((su: any) => {
+            const isOwner = su.email === 'zkdubbingstudio@gmail.com' || su.role === 'owner';
             userList.push({
               uid: su.id,
               id: su.id,
               email: su.email || '',
               displayName: su.username || su.displayName || 'Anime Fan',
               photoURL: su.photo_url || su.photoURL || su.avatar_url || '',
-              role: (su.role === 'admin' || su.email === 'zkdubbingstudio@gmail.com') ? 'admin' : 'user',
+              role: isOwner ? 'owner' : 'user',
               isBanned: Boolean(su.is_banned || su.isBanned),
               createdAt: su.created_at ? new Date(su.created_at).getTime() : Date.now(),
               settings: su.settings,
@@ -75,7 +76,7 @@ export default function AdminUsers() {
             email: 'zkdubbingstudio@gmail.com',
             displayName: 'ZK Dubbing Studio Admin',
             photoURL: 'https://i.ibb.co/2Yp3CDq9/file-000000006f2c8211b20c6bedc9f9ac12.png',
-            role: 'admin',
+            role: 'owner',
             createdAt: Date.now() - 1000 * 60 * 60 * 24 * 30,
           },
         ]);
@@ -92,8 +93,8 @@ export default function AdminUsers() {
   }, []);
 
   const handleToggleBan = async (user: any) => {
-    if (user.role === 'admin' || user.email === 'zkdubbingstudio@gmail.com') {
-      alert('Cannot modify master administrator account.');
+    if (user.role === 'owner' || user.role === 'admin' || user.email === 'zkdubbingstudio@gmail.com') {
+      alert('Cannot modify studio owner account.');
       return;
     }
     const userId = user.uid || user.id;
@@ -113,8 +114,8 @@ export default function AdminUsers() {
   };
 
   const handleDelete = async (user: any) => {
-    if (user.role === 'admin' || user.email === 'zkdubbingstudio@gmail.com') {
-      alert('Cannot delete master administrator account.');
+    if (user.role === 'owner' || user.role === 'admin' || user.email === 'zkdubbingstudio@gmail.com') {
+      alert('Cannot delete studio owner account.');
       return;
     }
     if (!window.confirm(`Permanently remove user account ${user.email}?`)) return;
@@ -309,7 +310,7 @@ export default function AdminUsers() {
             </thead>
             <tbody className="divide-y divide-white/5">
               {filteredUsers.map(user => {
-                const isAdmin = user.role === 'admin' || user.email === 'zkdubbingstudio@gmail.com';
+                const isOwner = user.role === 'owner' || user.email === 'zkdubbingstudio@gmail.com';
                 const joinDate = user.createdAt 
                   ? new Date(typeof user.createdAt === 'number' ? user.createdAt : user.createdAt).toLocaleDateString()
                   : 'Recent';
@@ -334,10 +335,10 @@ export default function AdminUsers() {
                       </div>
                     </td>
                     <td className="p-4">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        isAdmin ? 'bg-brand/20 text-brand border border-brand/30' : 'bg-white/10 text-white/70'
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                        isOwner ? 'bg-[#00e5ff]/20 text-[#00e5ff] border border-[#00e5ff]/40 shadow-[0_0_8px_rgba(0,229,255,0.3)]' : 'bg-white/10 text-white/70'
                       }`}>
-                        {isAdmin ? 'Admin' : 'Member'}
+                        {isOwner ? 'Owner' : 'User'}
                       </span>
                     </td>
                     <td className="p-4 text-white/50">
@@ -362,7 +363,7 @@ export default function AdminUsers() {
                       </button>
                     </td>
                     <td className="p-4 text-right space-x-1.5">
-                      {!isAdmin && (
+                      {!isOwner && (
                         <>
                           <button
                             onClick={() => handleToggleBan(user)}

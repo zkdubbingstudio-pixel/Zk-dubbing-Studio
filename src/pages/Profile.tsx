@@ -7,67 +7,177 @@ import {
   Play, 
   Trash2, 
   User as UserIcon, 
-  Compass,
-  AlertCircle
+  Compass, 
+  Heart, 
+  History, 
+  Film, 
+  Calendar, 
+  Sparkles, 
+  CheckCircle2, 
+  AlertCircle 
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { 
   signOutUser, 
-  isAuthorizedAdmin, 
-  signInWithGoogle 
+  isAuthorizedAdmin 
 } from '../lib/authService';
 import { 
   getUserProgress, 
-  deleteUserProgress 
+  deleteUserProgress, 
+  getWatchHistory, 
+  getFavorites, 
+  removeFavorite 
 } from '../lib/dataService';
 import SmartImage from '../components/SmartImage';
 
+type ProfileTab = 'continue' | 'history' | 'favorites' | 'recent';
+
 export default function Profile() {
-  const { user, firebaseUser, loading } = useAuthStore();
+  const { user, setUser, setAuthSuccessMessage, setAuthModalOpen } = useAuthStore();
   const navigate = useNavigate();
 
+  const [activeTab, setActiveTab] = useState<ProfileTab>('continue');
   const [continueWatching, setContinueWatching] = useState<any[]>([]);
+  const [watchHistory, setWatchHistory] = useState<any[]>([]);
+  const [favoriteAnime, setFavoriteAnime] = useState<any[]>([]);
+  const [recentlyWatched, setRecentlyWatched] = useState<any[]>([]);
   const [dataLoading, setDataLoading] = useState<boolean>(true);
-  const [isRedirecting, setIsRedirecting] = useState<boolean>(false);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
 
-  const effectiveUserId = user?.uid || firebaseUser?.uid || null;
+  const effectiveUserId = user?.uid || user?.id || null;
+  const isSignedIn = Boolean(user);
 
-  // User is guaranteed by ProtectedRoute. If somehow not authenticated, navigate to login.
-  useEffect(() => {
-    if (!loading && !user && !firebaseUser) {
-      navigate('/login?redirect=%2Fprofile', { replace: true });
-    }
-  }, [loading, user, firebaseUser, navigate]);
+  // Identifiers
+  const email = (user?.email || '').toLowerCase();
+  const displayName = user?.name || user?.displayName || (email ? email.split('@')[0] : 'Anime Fan');
+  const photoURL = user?.profilePhoto || user?.photoURL || '';
+  const isAdmin = Boolean(email && isAuthorizedAdmin(email));
 
-  // Load Continue Watching ONLY from user's real watch history in Supabase user_progress table
+  // Joined Date calculation
+  const joinedDate = React.useMemo(() => {
+    try {
+      const rawTimestamp = user?.createdAt;
+      if (rawTimestamp) {
+        const d = new Date(typeof rawTimestamp === 'number' ? rawTimestamp : String(rawTimestamp));
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+    } catch {}
+    return 'October 2024';
+  }, [user]);
+
+  // Load real data for all 4 profile sections (from Supabase / Firestore + local storage fallback)
   useEffect(() => {
     let isMounted = true;
 
-    async function loadWatchHistory() {
-      if (!effectiveUserId) {
-        if (isMounted) setDataLoading(false);
-        return;
+    async function loadAllProfileData() {
+      setDataLoading(true);
+
+      // 1. Local fallback data
+      let localHistory: any[] = [];
+      let localFavorites: any[] = [];
+      try {
+        const storedHist = localStorage.getItem('zk_watch_history');
+        if (storedHist) localHistory = JSON.parse(storedHist);
+      } catch {}
+      try {
+        const storedFavs = localStorage.getItem('zk_local_favorites');
+        if (storedFavs) localFavorites = JSON.parse(storedFavs);
+      } catch {}
+
+      // 2. Remote database fetch if signed in
+      let remoteProgress: any[] = [];
+      let remoteHistory: any[] = [];
+      let remoteFavorites: any[] = [];
+
+      if (effectiveUserId) {
+        try {
+          const [prog, hist, favs] = await Promise.all([
+            getUserProgress(effectiveUserId),
+            getWatchHistory(effectiveUserId),
+            getFavorites(effectiveUserId),
+          ]);
+          remoteProgress = prog || [];
+          remoteHistory = hist || [];
+          remoteFavorites = favs || [];
+        } catch (err) {
+          console.warn('Error loading remote profile data:', err);
+        }
       }
 
-      setDataLoading(true);
-      try {
-        const progressList = await getUserProgress(effectiveUserId);
-        if (isMounted) {
-          // Strictly verify real records: must have anime_id and episode_id
-          const validRecords = (progressList || []).filter(
-            (item: any) => Boolean(item && item.anime_id && item.episode_id)
-          );
-          setContinueWatching(validRecords);
+      if (!isMounted) return;
+
+      // Merge Continue Watching
+      const validRemoteProgress = remoteProgress.filter((p: any) => Boolean(p && p.anime_id && p.episode_id));
+      const formattedLocalProgress = localHistory.map((item: any) => ({
+        id: item.episodeId,
+        user_id: effectiveUserId || 'guest',
+        anime_id: item.animeId,
+        anime_title: item.animeTitle,
+        episode_id: item.episodeId,
+        episode_title: item.episodeTitle,
+        season_id: item.seasonId,
+        season_number: item.seasonNumber,
+        episode_number: item.episodeNumber,
+        poster_url: item.posterUrl,
+        current_time: 240,
+        duration: 1440,
+        updated_at: item.timestamp ? new Date(item.timestamp).toISOString() : new Date().toISOString(),
+      }));
+
+      // Combine and deduplicate Continue Watching
+      const progressMap = new Map<string, any>();
+      validRemoteProgress.forEach((p) => progressMap.set(p.episode_id, p));
+      formattedLocalProgress.forEach((p) => {
+        if (!progressMap.has(p.episode_id)) {
+          progressMap.set(p.episode_id, p);
         }
-      } catch (err) {
-        console.error('Error loading Supabase continue watching data:', err);
-      } finally {
-        if (isMounted) setDataLoading(false);
-      }
+      });
+      const mergedContinue = Array.from(progressMap.values());
+      setContinueWatching(mergedContinue);
+
+      // Merge Watch History (Full chronological list)
+      const mergedHist = remoteHistory.length > 0 ? remoteHistory : formattedLocalProgress;
+      setWatchHistory(mergedHist);
+
+      // Recently Watched: Unique anime series extracted from watch history
+      const recentAnimeMap = new Map<string, any>();
+      mergedHist.forEach((item) => {
+        const aid = item.anime_id || item.animeId;
+        if (aid && !recentAnimeMap.has(aid)) {
+          recentAnimeMap.set(aid, {
+            id: aid,
+            title: item.anime_title || item.animeTitle || 'Anime',
+            posterUrl: item.poster_url || item.posterUrl || '',
+            lastEpisode: item.episode_number || item.episodeNumber || 1,
+            lastEpisodeTitle: item.episode_title || item.episodeTitle || '',
+            seasonNumber: item.season_number || item.seasonNumber || 1,
+            seasonId: item.season_id || item.seasonId || 's1',
+            episodeId: item.episode_id || item.episodeId || '',
+            updatedAt: item.updated_at || item.timestamp,
+          });
+        }
+      });
+      setRecentlyWatched(Array.from(recentAnimeMap.values()));
+
+      // Merge Favorites
+      const favMap = new Map<string, any>();
+      remoteFavorites.forEach((f) => {
+        const fid = f.anime_id || f.id;
+        if (fid) favMap.set(fid, f);
+      });
+      localFavorites.forEach((f) => {
+        const fid = f.anime_id || f.id;
+        if (fid && !favMap.has(fid)) {
+          favMap.set(fid, f);
+        }
+      });
+      setFavoriteAnime(Array.from(favMap.values()));
+
+      setDataLoading(false);
     }
 
-    loadWatchHistory();
+    loadAllProfileData();
 
     return () => {
       isMounted = false;
@@ -77,24 +187,52 @@ export default function Profile() {
   const handleLogout = async () => {
     try {
       await signOutUser();
-      navigate('/');
-    } catch (err) {
-      console.error('Logout error:', err);
-    }
+    } catch {}
+    setUser(null);
+    setAuthSuccessMessage('Logged out successfully.');
+    navigate('/');
   };
 
-  const handleRemoveProgress = async (episodeId: string, e: React.MouseEvent) => {
+  const handleSignIn = () => {
+    setAuthModalOpen(true);
+  };
+
+  const handleRemoveContinue = async (episodeId: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!effectiveUserId) return;
-    await deleteUserProgress(effectiveUserId, episodeId);
-    setContinueWatching((prev) => prev.filter((item) => item.episode_id !== episodeId));
+    if (effectiveUserId) {
+      await deleteUserProgress(effectiveUserId, episodeId);
+    }
+    // Also remove from local storage
+    try {
+      const stored = localStorage.getItem('zk_watch_history');
+      if (stored) {
+        const parsed = JSON.parse(stored).filter((item: any) => item.episodeId !== episodeId);
+        localStorage.setItem('zk_watch_history', JSON.stringify(parsed));
+      }
+    } catch {}
+    setContinueWatching((prev) => prev.filter((item) => (item.episode_id || item.episodeId) !== episodeId));
   };
 
-  const formatTimeAgo = (timestamp?: string): string => {
+  const handleRemoveFavorite = async (animeId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (effectiveUserId) {
+      await removeFavorite(effectiveUserId, animeId);
+    }
+    try {
+      const localFavs = JSON.parse(localStorage.getItem('zk_local_favorites') || '[]');
+      const filtered = localFavs.filter((f: any) => f.id !== animeId && f.anime_id !== animeId);
+      localStorage.setItem('zk_local_favorites', JSON.stringify(filtered));
+    } catch {}
+    setFavoriteAnime((prev) => prev.filter((f) => (f.anime_id || f.id) !== animeId));
+  };
+
+  const formatTimeAgo = (timestamp?: string | number): string => {
     if (!timestamp) return '';
     try {
-      const diffMs = Date.now() - new Date(timestamp).getTime();
+      const timeMs = typeof timestamp === 'number' ? timestamp : new Date(timestamp).getTime();
+      const diffMs = Date.now() - timeMs;
       const mins = Math.floor(diffMs / (1000 * 60));
       if (mins < 60) return `${Math.max(1, mins)}m ago`;
       const hours = Math.floor(mins / 60);
@@ -106,93 +244,17 @@ export default function Profile() {
     }
   };
 
-  // Identifiers: Only Avatar, Display Name, Email
-  const displayName = firebaseUser?.displayName || user?.displayName || user?.email?.split('@')[0] || 'User';
-  const email = firebaseUser?.email || user?.email || '';
-  const photoURL = firebaseUser?.photoURL || user?.photoURL;
-  const isAdmin = isAuthorizedAdmin(email) || user?.role === 'admin';
-
-  // 1. Loading state
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#05070b] pt-28 pb-16 flex flex-col items-center justify-center px-4">
-        <div className="w-12 h-12 border-3 border-[#00e5ff] border-t-transparent rounded-full animate-spin shadow-[0_0_20px_rgba(0,229,255,0.4)] mb-4" />
-        <p className="text-[#00e5ff] text-xs tracking-widest font-mono uppercase">Loading Profile...</p>
-      </div>
-    );
-  }
-
-  // 2. Unauthenticated: Redirect to Google Sign-In with one-tap access (Zero fake profile data)
-  if (!user && !firebaseUser) {
-    return (
-      <div className="min-h-screen bg-[#05070b] pt-28 pb-16 flex items-center justify-center px-4">
-        <div className="max-w-md w-full glass-cyber-card rounded-2xl p-8 border border-[#00e5ff]/20 text-center shadow-[0_0_35px_rgba(0,229,255,0.15)] relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-[#00e5ff]/10 rounded-full blur-3xl pointer-events-none" />
-          
-          <div className="w-16 h-16 rounded-2xl bg-[#00e5ff]/10 border border-[#00e5ff]/30 mx-auto flex items-center justify-center mb-6 shadow-[0_0_20px_rgba(0,229,255,0.25)]">
-            <UserIcon className="w-8 h-8 text-[#00e5ff]" />
-          </div>
-
-          <h2 className="text-2xl font-black text-white tracking-wide mb-2">Sign-In Required</h2>
-          <p className="text-sm text-silver/80 mb-6 leading-relaxed">
-            {isRedirecting 
-              ? 'Redirecting to Google Sign-In to access your profile and watch history...' 
-              : 'Please sign in with your Google account to view your profile and continue watching.'}
-          </p>
-
-          {authError && (
-            <div className="mb-6 p-3 rounded-xl bg-red-950/40 border border-red-500/30 text-xs text-red-300 flex items-center gap-2 text-left">
-              <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
-              <span>{authError}</span>
-            </div>
-          )}
-
-          <button
-            onClick={() => {
-              setIsRedirecting(true);
-              signInWithGoogle({ preferRedirect: false }).catch((err) => {
-                setIsRedirecting(false);
-                setAuthError(err?.message || 'Login failed. Please try again.');
-              });
-            }}
-            className="w-full btn-3d-cyan py-3.5 px-6 rounded-xl font-black text-sm flex items-center justify-center gap-3 shadow-[0_0_20px_rgba(0,229,255,0.3)] cursor-pointer"
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24">
-              <path
-                fill="#4285F4"
-                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-              />
-              <path
-                fill="#34A853"
-                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-              />
-              <path
-                fill="#EA4335"
-                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-              />
-            </svg>
-            <span>Sign In with Google</span>
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-[#05070b] pt-24 pb-20 px-4 sm:px-6 lg:px-8">
       <div className="max-w-6xl mx-auto space-y-8">
 
-        {/* 1. Header Card: Keep ONLY User Avatar, Display Name, Email, Sign Out & (if admin) Admin Panel */}
-        <div className="glass-cyber-card rounded-2xl p-6 sm:p-8 border border-[#00e5ff]/20 shadow-[0_10px_30px_rgba(0,0,0,0.8)] relative overflow-hidden">
+        {/* 1. Header Card: Profile Photo, Display Name, Email, Joined Date */}
+        <div className="glass-cyber-card rounded-3xl p-6 sm:p-8 border border-[#00e5ff]/20 shadow-[0_10px_35px_rgba(0,0,0,0.8)] relative overflow-hidden">
           <div className="absolute top-0 right-0 w-80 h-80 bg-[#00e5ff]/5 rounded-full blur-[100px] pointer-events-none" />
 
           <div className="flex flex-col sm:flex-row items-center sm:items-start justify-between gap-6 relative z-10">
             
-            {/* User Avatar, Display Name, Email */}
+            {/* User Avatar, Display Name, Email, Joined Date */}
             <div className="flex flex-col sm:flex-row items-center gap-5 text-center sm:text-left">
               <div className="relative shrink-0">
                 <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden border-2 border-[#00e5ff] shadow-[0_0_25px_rgba(0,229,255,0.35)] bg-[#0a0e17] flex items-center justify-center">
@@ -210,29 +272,39 @@ export default function Profile() {
                   )}
                 </div>
                 <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-lg bg-[#05070b] border border-[#00e5ff]/50 flex items-center justify-center shadow-md">
-                  <div className="w-2 h-2 rounded-full bg-[#00e5ff] shadow-[0_0_8px_#00e5ff]" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-[#00e5ff] shadow-[0_0_8px_#00e5ff]" />
                 </div>
               </div>
 
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
                   <h1 className="text-2xl sm:text-3xl font-black text-white tracking-wide">
                     {displayName}
                   </h1>
-                  {isAdmin && (
-                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-[#00e5ff]/10 text-[#00e5ff] border border-[#00e5ff]/40 shadow-[0_0_10px_rgba(0,229,255,0.2)]">
+                  {isAdmin ? (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-[#00e5ff]/15 text-[#00e5ff] border border-[#00e5ff]/40 shadow-[0_0_10px_rgba(0,229,255,0.2)]">
                       Admin
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-white/5 text-silver border border-white/10">
+                      {isSignedIn ? 'Member' : 'Guest'}
                     </span>
                   )}
                 </div>
 
                 <p className="text-sm text-silver/70 font-mono break-all">
-                  {email}
+                  {email || 'Free Visitor (Guest Mode)'}
                 </p>
+
+                {/* Joined Date */}
+                <div className="flex items-center justify-center sm:justify-start gap-1.5 text-xs text-white/50 pt-0.5">
+                  <Calendar className="w-3.5 h-3.5 text-[#00e5ff]" />
+                  <span>Joined {joinedDate}</span>
+                </div>
               </div>
             </div>
 
-            {/* Actions: Sign Out (and Admin Panel if admin) - NO Settings */}
+            {/* Actions: Sign Out (and Admin Panel ONLY if admin) */}
             <div className="flex flex-wrap items-center justify-center gap-3 shrink-0 w-full sm:w-auto">
               {isAdmin && (
                 <Link
@@ -244,162 +316,377 @@ export default function Profile() {
                 </Link>
               )}
 
-              <button
-                onClick={handleLogout}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-red-950/30 hover:bg-red-900/50 text-red-300 hover:text-red-200 border border-red-500/30 transition-all duration-300 cursor-pointer shadow-sm"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Sign Out</span>
-              </button>
+              {isSignedIn ? (
+                <button
+                  onClick={handleLogout}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-red-950/30 hover:bg-red-900/50 text-red-300 hover:text-red-200 border border-red-500/30 transition-all duration-300 cursor-pointer shadow-sm"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Sign Out</span>
+                </button>
+              ) : (
+                <button
+                  onClick={handleSignIn}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-gradient-to-r from-[#00e5ff] to-[#00b4d8] text-black shadow-[0_0_20px_rgba(0,229,255,0.35)] hover:scale-105 active:scale-95 transition-all cursor-pointer"
+                >
+                  <UserIcon className="w-3.5 h-3.5 text-black" />
+                  <span>Sign In</span>
+                </button>
+              )}
             </div>
 
           </div>
         </div>
 
-        {/* 2. Section: Continue Watching ONLY (Real data from Supabase user_progress table) */}
-        <div className="space-y-5">
-          <div className="flex items-center justify-between border-b border-white/10 pb-3">
-            <div className="flex items-center gap-2.5">
-              <Clock className="w-5 h-5 text-[#00e5ff]" />
-              <h2 className="text-xl font-black text-white tracking-wide">Continue Watching</h2>
-            </div>
+        {/* 2. Cyber Tabs: Continue Watching | Watch History | Favorite Anime | Recently Watched */}
+        <div className="flex items-center gap-2 border-b border-white/10 pb-2 overflow-x-auto scrollbar-none">
+          <button
+            onClick={() => setActiveTab('continue')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap cursor-pointer ${
+              activeTab === 'continue'
+                ? 'bg-[#00e5ff]/20 text-[#00e5ff] border border-[#00e5ff]/40 shadow-[0_0_15px_rgba(0,229,255,0.25)]'
+                : 'text-white/60 hover:text-white hover:bg-white/5 border border-transparent'
+            }`}
+          >
+            <Clock className="w-4 h-4" />
+            <span>Continue Watching</span>
             {continueWatching.length > 0 && (
-              <span className="text-xs px-2.5 py-1 rounded-full bg-[#00e5ff]/10 text-[#00e5ff] border border-[#00e5ff]/30 font-bold">
-                {continueWatching.length} {continueWatching.length === 1 ? 'Title' : 'Titles'}
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-[#00e5ff]/20 text-[#00e5ff]">
+                {continueWatching.length}
               </span>
             )}
-          </div>
+          </button>
 
-          {dataLoading ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {[1, 2, 3, 4].map((n) => (
-                <div key={n} className="glass-cyber-card rounded-2xl p-3 border border-white/5 animate-pulse space-y-3">
-                  <div className="aspect-video rounded-xl bg-white/5" />
-                  <div className="h-4 bg-white/10 rounded w-3/4" />
-                  <div className="h-3 bg-white/5 rounded w-1/2" />
-                </div>
-              ))}
-            </div>
-          ) : continueWatching.length === 0 ? (
-            /* Requirement 6: "No Continue Watching Yet" with clean empty-state illustration */
-            <div className="glass-cyber-card rounded-2xl p-10 sm:p-14 text-center border border-white/10 relative overflow-hidden shadow-[0_15px_40px_rgba(0,0,0,0.6)]">
-              <div className="absolute inset-0 bg-gradient-to-b from-[#00e5ff]/5 via-transparent to-transparent pointer-events-none" />
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap cursor-pointer ${
+              activeTab === 'history'
+                ? 'bg-[#00e5ff]/20 text-[#00e5ff] border border-[#00e5ff]/40 shadow-[0_0_15px_rgba(0,229,255,0.25)]'
+                : 'text-white/60 hover:text-white hover:bg-white/5 border border-transparent'
+            }`}
+          >
+            <History className="w-4 h-4" />
+            <span>Watch History</span>
+            {watchHistory.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-white/10 text-white/70">
+                {watchHistory.length}
+              </span>
+            )}
+          </button>
 
-              {/* Clean Empty-State Cyber Illustration */}
-              <div className="relative w-36 h-36 mx-auto mb-6 flex items-center justify-center">
-                {/* Background holographic glow rings */}
-                <div className="absolute inset-0 rounded-full border border-[#00e5ff]/20 animate-ping opacity-30" />
-                <div className="absolute inset-2 rounded-full border border-[#00e5ff]/30 bg-[#00e5ff]/5" />
-                
-                {/* Clean SVG Illustration */}
-                <svg className="w-20 h-20 text-[#00e5ff] relative z-10" viewBox="0 0 80 80" fill="none">
-                  {/* Cyber monitor frame */}
-                  <rect x="10" y="14" width="60" height="42" rx="6" stroke="#00e5ff" strokeWidth="2.5" strokeDasharray="3 2" />
-                  <path d="M10 24H70" stroke="#00e5ff" strokeWidth="1.5" strokeOpacity="0.4" />
-                  {/* Stand */}
-                  <path d="M34 56L30 66H50L46 56" stroke="#00e5ff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  <line x1="24" y1="66" x2="56" y2="66" stroke="#00e5ff" strokeWidth="2.5" strokeLinecap="round" />
-                  {/* Neon Play Button in center */}
-                  <circle cx="40" cy="37" r="12" fill="#00e5ff" fillOpacity="0.15" stroke="#00e5ff" strokeWidth="2" />
-                  <polygon points="37,31 47,37 37,43" fill="#00e5ff" />
-                  {/* Screen dots */}
-                  <circle cx="16" cy="19" r="1.5" fill="#00e5ff" />
-                  <circle cx="22" cy="19" r="1.5" fill="#00e5ff" fillOpacity="0.5" />
-                  <circle cx="28" cy="19" r="1.5" fill="#00e5ff" fillOpacity="0.3" />
-                </svg>
-              </div>
+          <button
+            onClick={() => setActiveTab('favorites')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap cursor-pointer ${
+              activeTab === 'favorites'
+                ? 'bg-[#00e5ff]/20 text-[#00e5ff] border border-[#00e5ff]/40 shadow-[0_0_15px_rgba(0,229,255,0.25)]'
+                : 'text-white/60 hover:text-white hover:bg-white/5 border border-transparent'
+            }`}
+          >
+            <Heart className="w-4 h-4" />
+            <span>Favorite Anime</span>
+            {favoriteAnime.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-white/10 text-white/70">
+                {favoriteAnime.length}
+              </span>
+            )}
+          </button>
 
-              <h3 className="text-xl sm:text-2xl font-black text-white tracking-wide mb-2">
-                No Continue Watching Yet
-              </h3>
-              
-              <p className="text-sm text-silver/70 max-w-md mx-auto mb-6 leading-relaxed">
-                You haven&apos;t started watching any anime yet. Stream an episode to automatically track and resume your progress here.
-              </p>
-
-              <Link
-                to="/"
-                className="inline-flex items-center gap-2.5 btn-3d-cyan px-7 py-3 rounded-xl text-xs font-black uppercase tracking-wider shadow-[0_0_20px_rgba(0,229,255,0.3)]"
-              >
-                <Compass className="w-4 h-4" />
-                <span>Explore Anime Catalog</span>
-              </Link>
-            </div>
-          ) : (
-            /* Real Supabase watch records only (Zero fake anime, zero Jujutsu Kaisen hardcoding) */
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5">
-              {continueWatching.map((item) => {
-                const currentTime = Number(item.current_time) || 0;
-                const duration = Number(item.duration) || 1440;
-                const percent = Math.min(100, Math.max(5, Math.round((currentTime / duration) * 100)));
-                const watchUrl = `/watch/${item.anime_id}/${item.season_id || 's1'}/${item.episode_id}`;
-
-                return (
-                  <div
-                    key={item.id || `${item.user_id}_${item.episode_id}`}
-                    className="group glass-cyber-card rounded-2xl p-3 border border-white/10 hover:border-[#00e5ff]/50 transition-all duration-300 relative overflow-hidden flex flex-col justify-between shadow-[0_4px_20px_rgba(0,0,0,0.5)]"
-                  >
-                    <Link to={watchUrl} className="block relative aspect-video rounded-xl overflow-hidden bg-[#0a0e17] mb-3">
-                      <SmartImage
-                        src={item.poster_url || item.posterUrl || ''}
-                        alt={item.anime_title || 'Episode'}
-                        type="poster"
-                        loading="lazy"
-                        className="w-full h-full group-hover:scale-105 transition-transform duration-500"
-                        style={{ objectFit: 'cover', objectPosition: 'center center' }}
-                        titleFallback={item.anime_title || 'Continue Stream'}
-                      />
-
-                      {/* Play Overlay */}
-                      <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <div className="w-11 h-11 rounded-full bg-[#00e5ff] text-black flex items-center justify-center shadow-[0_0_20px_#00e5ff]">
-                          <Play className="w-5 h-5 fill-current ml-0.5" />
-                        </div>
-                      </div>
-
-                      {/* Progress Bar */}
-                      <div className="absolute bottom-0 inset-x-0 h-1.5 bg-black/70">
-                        <div
-                          className="h-full bg-[#00e5ff] shadow-[0_0_10px_#00e5ff]"
-                          style={{ width: `${percent}%` }}
-                        />
-                      </div>
-                    </Link>
-
-                    <div className="space-y-1.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <Link
-                          to={watchUrl}
-                          className="font-black text-sm text-white group-hover:text-[#00e5ff] transition-colors line-clamp-1"
-                        >
-                          {item.anime_title || 'Anime Series'}
-                        </Link>
-                        <button
-                          onClick={(e) => handleRemoveProgress(item.episode_id, e)}
-                          title="Remove from Continue Watching"
-                          className="text-silver-dark hover:text-red-400 p-1 transition-colors cursor-pointer shrink-0"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-
-                      <p className="text-xs text-[#00e5ff] font-semibold truncate">
-                        {item.episode_title || `Episode ${item.episode_number || 1}`}
-                      </p>
-
-                      <div className="flex items-center justify-between text-[11px] text-silver-dark pt-0.5">
-                        <span>Season {item.season_number || 1}</span>
-                        {item.updated_at && <span>{formatTimeAgo(item.updated_at)}</span>}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          <button
+            onClick={() => setActiveTab('recent')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap cursor-pointer ${
+              activeTab === 'recent'
+                ? 'bg-[#00e5ff]/20 text-[#00e5ff] border border-[#00e5ff]/40 shadow-[0_0_15px_rgba(0,229,255,0.25)]'
+                : 'text-white/60 hover:text-white hover:bg-white/5 border border-transparent'
+            }`}
+          >
+            <Film className="w-4 h-4" />
+            <span>Recently Watched</span>
+            {recentlyWatched.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-white/10 text-white/70">
+                {recentlyWatched.length}
+              </span>
+            )}
+          </button>
         </div>
 
+        {/* 3. Tab Content */}
+        {dataLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {[1, 2, 3, 4].map((n) => (
+              <div key={n} className="glass-cyber-card rounded-2xl p-3 border border-white/5 animate-pulse space-y-3">
+                <div className="aspect-video rounded-xl bg-white/5" />
+                <div className="h-4 bg-white/10 rounded w-3/4" />
+                <div className="h-3 bg-white/5 rounded w-1/2" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div>
+            {/* TAB 1: Continue Watching */}
+            {activeTab === 'continue' && (
+              continueWatching.length === 0 ? (
+                <EmptyState
+                  icon={<Clock className="w-12 h-12 text-[#00e5ff]" />}
+                  title="No Continue Watching Yet"
+                  description="You haven't started watching any anime yet. Stream an episode to automatically track and resume your progress here."
+                />
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5">
+                  {continueWatching.map((item) => {
+                    const currentTime = Number(item.current_time) || 0;
+                    const duration = Number(item.duration) || 1440;
+                    const percent = Math.min(100, Math.max(5, Math.round((currentTime / duration) * 100)));
+                    const epId = item.episode_id || item.episodeId;
+                    const watchUrl = `/watch/${item.anime_id || item.animeId}/${item.season_id || item.seasonId || 's1'}/${epId}`;
+
+                    return (
+                      <div
+                        key={item.id || epId}
+                        className="group glass-cyber-card rounded-2xl p-3 border border-white/10 hover:border-[#00e5ff]/50 transition-all duration-300 relative overflow-hidden flex flex-col justify-between shadow-[0_4px_20px_rgba(0,0,0,0.5)]"
+                      >
+                        <Link to={watchUrl} className="block relative aspect-video rounded-xl overflow-hidden bg-[#0a0e17] mb-3">
+                          <SmartImage
+                            src={item.poster_url || item.posterUrl || ''}
+                            alt={item.anime_title || 'Episode'}
+                            type="poster"
+                            loading="lazy"
+                            className="w-full h-full group-hover:scale-105 transition-transform duration-500"
+                            style={{ objectFit: 'cover', objectPosition: 'center center' }}
+                            titleFallback={item.anime_title || 'Continue Stream'}
+                          />
+                          <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <div className="w-11 h-11 rounded-full bg-[#00e5ff] text-black flex items-center justify-center shadow-[0_0_20px_#00e5ff]">
+                              <Play className="w-5 h-5 fill-current ml-0.5" />
+                            </div>
+                          </div>
+                          <div className="absolute bottom-0 inset-x-0 h-1.5 bg-black/70">
+                            <div className="h-full bg-[#00e5ff] shadow-[0_0_10px_#00e5ff]" style={{ width: `${percent}%` }} />
+                          </div>
+                        </Link>
+
+                        <div className="space-y-1.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <Link to={watchUrl} className="font-black text-sm text-white group-hover:text-[#00e5ff] transition-colors line-clamp-1">
+                              {item.anime_title || item.animeTitle || 'Anime Series'}
+                            </Link>
+                            <button
+                              onClick={(e) => handleRemoveContinue(epId, e)}
+                              title="Remove from Continue Watching"
+                              className="text-silver-dark hover:text-red-400 p-1 transition-colors cursor-pointer shrink-0"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          <p className="text-xs text-[#00e5ff] font-semibold truncate">
+                            {item.episode_title || item.episodeTitle || `Episode ${item.episode_number || item.episodeNumber || 1}`}
+                          </p>
+
+                          <div className="flex items-center justify-between text-[11px] text-silver-dark pt-0.5">
+                            <span>Season {item.season_number || item.seasonNumber || 1}</span>
+                            {item.updated_at && <span>{formatTimeAgo(item.updated_at)}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            )}
+
+            {/* TAB 2: Watch History */}
+            {activeTab === 'history' && (
+              watchHistory.length === 0 ? (
+                <EmptyState
+                  icon={<History className="w-12 h-12 text-[#00e5ff]" />}
+                  title="No Watch History"
+                  description="Episodes you stream will appear here in chronological order so you can easily review your watch journey."
+                />
+              ) : (
+                <div className="space-y-3">
+                  {watchHistory.map((item, idx) => {
+                    const epId = item.episode_id || item.episodeId;
+                    const watchUrl = `/watch/${item.anime_id || item.animeId}/${item.season_id || item.seasonId || 's1'}/${epId}`;
+
+                    return (
+                      <div
+                        key={item.id || `${epId}_${idx}`}
+                        className="glass-cyber-card p-3.5 sm:p-4 rounded-2xl border border-white/10 hover:border-[#00e5ff]/40 flex items-center justify-between gap-4 transition-all"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="w-16 h-12 rounded-xl overflow-hidden bg-[#0a0e17] shrink-0 border border-white/10">
+                            <SmartImage
+                              src={item.poster_url || item.posterUrl || ''}
+                              alt={item.anime_title || 'Episode'}
+                              type="poster"
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <Link to={watchUrl} className="font-bold text-sm text-white hover:text-[#00e5ff] transition-colors truncate block">
+                              {item.anime_title || item.animeTitle || 'Anime Series'}
+                            </Link>
+                            <p className="text-xs text-[#00e5ff] truncate">
+                              {item.episode_title || item.episodeTitle || `Episode ${item.episode_number || item.episodeNumber || 1}`}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 shrink-0">
+                          <span className="text-xs text-white/50 hidden sm:inline-block">
+                            {formatTimeAgo(item.updated_at || item.timestamp)}
+                          </span>
+                          <Link
+                            to={watchUrl}
+                            className="p-2 rounded-xl bg-[#00e5ff]/15 hover:bg-[#00e5ff] text-[#00e5ff] hover:text-black transition-all"
+                            title="Replay"
+                          >
+                            <Play className="w-4 h-4 fill-current" />
+                          </Link>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            )}
+
+            {/* TAB 3: Favorite Anime */}
+            {activeTab === 'favorites' && (
+              favoriteAnime.length === 0 ? (
+                <EmptyState
+                  icon={<Heart className="w-12 h-12 text-[#00e5ff]" />}
+                  title="No Favorite Anime Yet"
+                  description="Tap the heart icon on any anime details page to pin your favorite series and movies here."
+                />
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                  {favoriteAnime.map((item) => {
+                    const aid = item.anime_id || item.id;
+                    const detailsUrl = `/anime/${aid}`;
+
+                    return (
+                      <div
+                        key={aid}
+                        className="glass-cyber-card rounded-2xl p-2.5 border border-white/10 hover:border-[#00e5ff]/50 transition-all flex flex-col justify-between group"
+                      >
+                        <Link to={detailsUrl} className="block relative aspect-[2/3] rounded-xl overflow-hidden bg-[#0a0e17] mb-2.5">
+                          <SmartImage
+                            src={item.poster_url || item.posterUrl || ''}
+                            alt={item.anime_title || item.title || 'Anime'}
+                            type="poster"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                          />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <div className="w-10 h-10 rounded-full bg-[#00e5ff] text-black flex items-center justify-center shadow-[0_0_15px_#00e5ff]">
+                              <Play className="w-4 h-4 fill-current ml-0.5" />
+                            </div>
+                          </div>
+                        </Link>
+
+                        <div className="space-y-1">
+                          <div className="flex items-start justify-between gap-1.5">
+                            <Link to={detailsUrl} className="font-bold text-xs sm:text-sm text-white group-hover:text-[#00e5ff] transition-colors line-clamp-1">
+                              {item.anime_title || item.title || 'Anime Series'}
+                            </Link>
+                            <button
+                              onClick={(e) => handleRemoveFavorite(aid, e)}
+                              className="text-red-400/70 hover:text-red-400 p-0.5 cursor-pointer shrink-0"
+                              title="Remove Favorite"
+                            >
+                              <Heart className="w-3.5 h-3.5 fill-current" />
+                            </button>
+                          </div>
+                          <span className="text-[10px] text-white/50 block">Favorited Title</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            )}
+
+            {/* TAB 4: Recently Watched */}
+            {activeTab === 'recent' && (
+              recentlyWatched.length === 0 ? (
+                <EmptyState
+                  icon={<Film className="w-12 h-12 text-[#00e5ff]" />}
+                  title="No Recently Watched Series"
+                  description="When you start watching episodes, the anime series will be highlighted here for one-tap streaming resumption."
+                />
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {recentlyWatched.map((anime) => {
+                    const resumeUrl = `/watch/${anime.id}/${anime.seasonId || 's1'}/${anime.episodeId}`;
+
+                    return (
+                      <div
+                        key={anime.id}
+                        className="glass-cyber-card rounded-2xl p-4 border border-white/10 hover:border-[#00e5ff]/50 transition-all flex items-center gap-4 group"
+                      >
+                        <div className="w-18 h-24 rounded-xl overflow-hidden bg-[#0a0e17] shrink-0 border border-white/10 relative">
+                          <SmartImage
+                            src={anime.posterUrl}
+                            alt={anime.title}
+                            type="poster"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                          />
+                        </div>
+
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <h4 className="font-bold text-sm text-white group-hover:text-[#00e5ff] transition-colors truncate">
+                            {anime.title}
+                          </h4>
+                          <p className="text-xs text-[#00e5ff] font-semibold truncate">
+                            Last: Ep {anime.lastEpisode}
+                          </p>
+                          <p className="text-[11px] text-white/50">
+                            Season {anime.seasonNumber} • {formatTimeAgo(anime.updatedAt)}
+                          </p>
+
+                          <div className="pt-2">
+                            <Link
+                              to={resumeUrl}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#00e5ff] text-black font-extrabold text-xs shadow-[0_0_10px_rgba(0,229,255,0.3)] hover:scale-105 transition-all"
+                            >
+                              <Play className="w-3 h-3 fill-current" />
+                              <span>Play Ep {anime.lastEpisode}</span>
+                            </Link>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            )}
+          </div>
+        )}
+
       </div>
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
+  return (
+    <div className="glass-cyber-card rounded-3xl p-10 sm:p-14 text-center border border-white/10 relative overflow-hidden shadow-[0_15px_40px_rgba(0,0,0,0.6)]">
+      <div className="w-20 h-20 mx-auto mb-5 rounded-2xl bg-[#00e5ff]/10 border border-[#00e5ff]/20 flex items-center justify-center">
+        {icon}
+      </div>
+      <h3 className="text-xl sm:text-2xl font-black text-white tracking-wide mb-2">
+        {title}
+      </h3>
+      <p className="text-sm text-silver/70 max-w-md mx-auto mb-6 leading-relaxed">
+        {description}
+      </p>
+      <Link
+        to="/"
+        className="inline-flex items-center gap-2 btn-3d-cyan px-7 py-3 rounded-xl text-xs font-black uppercase tracking-wider shadow-[0_0_20px_rgba(0,229,255,0.3)]"
+      >
+        <Compass className="w-4 h-4" />
+        <span>Explore Anime Catalog</span>
+      </Link>
     </div>
   );
 }

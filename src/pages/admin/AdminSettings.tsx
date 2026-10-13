@@ -1,11 +1,13 @@
 import { useState, useEffect, FormEvent, ChangeEvent } from 'react';
 import { 
   Settings, Globe, Shield, RefreshCw, Download, Upload, Trash2, 
-  Check, AlertCircle, Sparkles, Send, Youtube, MessageSquare, Palette, HardDrive 
+  Check, AlertCircle, Sparkles, Send, Youtube, MessageSquare, Palette, HardDrive,
+  Bell, Volume2, VolumeX, UserPlus, Zap
 } from 'lucide-react';
 import { getAdminSettings, saveAdminSettings, AdminWebsiteSettings } from '../../lib/adminSettingsStore';
 import { getAllAnime, getAllSeasons, getAllEpisodes, saveAnimeBoth, saveSeasonBoth, saveEpisodeBoth } from '../../lib/dataService';
 import { logAdminActivity } from '../../lib/activityLogger';
+import { useOwnerNotificationsStore, dispatchOwnerNotification } from '../../lib/ownerNotificationService';
 
 export default function AdminSettings() {
   const [settings, setSettings] = useState<AdminWebsiteSettings>(getAdminSettings());
@@ -463,10 +465,96 @@ export default function AdminSettings() {
             <button
               type="button"
               onClick={handleClearCache}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold text-xs hover:bg-amber-500/30 transition-all flex-shrink-0"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold text-xs hover:bg-amber-500/30 transition-all flex-shrink-0 cursor-pointer"
             >
               {cacheCleared ? <Check className="w-4 h-4 text-emerald-400" /> : <Trash2 className="w-4 h-4" />}
               {cacheCleared ? 'Cache Purged!' : 'Purge All Cache'}
+            </button>
+          </div>
+        </div>
+
+        {/* Owner Live Toast Notification System */}
+        <div className="bg-[#090b12] border border-[#00e5ff]/30 rounded-3xl p-6 sm:p-8 space-y-6 shadow-[0_0_35px_rgba(0,229,255,0.15)] relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-80 h-80 bg-[#00e5ff]/5 rounded-full blur-[100px] pointer-events-none" />
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/10 pb-5">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-[#00e5ff]/20 border border-[#00e5ff]/40 flex items-center justify-center text-[#00e5ff] shadow-[0_0_15px_rgba(0,229,255,0.3)]">
+                <Bell className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-lg font-black text-white flex items-center gap-2">
+                  Owner Live Toast System
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                    Active
+                  </span>
+                </h2>
+                <p className="text-xs text-white/50">
+                  Target Recipient: <span className="font-mono text-[#00e5ff] font-bold">zkdubbingstudio@gmail.com</span>
+                </p>
+              </div>
+            </div>
+
+            {/* Sound Toggle */}
+            <button
+              type="button"
+              onClick={() => useOwnerNotificationsStore.getState().toggleSound()}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-white transition-all cursor-pointer w-fit"
+            >
+              {useOwnerNotificationsStore((s) => s.soundEnabled) ? (
+                <>
+                  <Volume2 className="w-4 h-4 text-emerald-400" />
+                  <span>Audio Chimes: <strong className="text-emerald-400">ON</strong></span>
+                </>
+              ) : (
+                <>
+                  <VolumeX className="w-4 h-4 text-white/40" />
+                  <span>Audio Chimes: <strong className="text-white/40">MUTED</strong></span>
+                </>
+              )}
+            </button>
+          </div>
+
+          <p className="text-xs text-white/70 leading-relaxed">
+            Real-time push notifications are dispatched to the owner whenever a new visitor registers an account or whenever an administrative modification is executed across anime, seasons, episodes, media, or settings.
+          </p>
+
+          {/* Test Buttons */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                dispatchOwnerNotification({
+                  type: 'new_user',
+                  title: '🎉 New User Registered',
+                  details: 'Aarav Sharma (aarav.anime@gmail.com) just created an account',
+                  userEmail: 'aarav.anime@gmail.com',
+                  userName: 'Aarav Sharma',
+                  actionUrl: '/admin/users',
+                  category: 'user',
+                });
+              }}
+              className="flex items-center justify-center gap-2.5 py-3 px-4 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/35 text-emerald-300 font-extrabold text-xs uppercase tracking-wider transition-all shadow-[0_0_15px_rgba(16,185,129,0.2)] hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>Test "New User" Toast</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                dispatchOwnerNotification({
+                  type: 'admin_action',
+                  title: '⚡ Admin Action: Published Episode',
+                  details: 'Solo Leveling Season 2 • Episode 7 has been marked live',
+                  actionUrl: '/admin/episodes',
+                  category: 'episode',
+                });
+              }}
+              className="flex items-center justify-center gap-2.5 py-3 px-4 rounded-xl bg-[#00e5ff]/15 hover:bg-[#00e5ff]/25 border border-[#00e5ff]/35 text-[#00e5ff] font-extrabold text-xs uppercase tracking-wider transition-all shadow-[0_0_15px_rgba(0,229,255,0.2)] hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
+            >
+              <Zap className="w-4 h-4" />
+              <span>Test "Admin Action" Toast</span>
             </button>
           </div>
         </div>

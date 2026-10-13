@@ -10,17 +10,19 @@ try {
 
 interface AuthState {
   user: User | null;
-  firebaseUser: FirebaseUser | null;
+  firebaseUser: any | null;
   loading: boolean;
   isSigningIn: boolean;
   authError: string | null;
   authSuccessMessage: string | null;
+  isAuthModalOpen: boolean;
   setUser: (user: User | null) => void;
-  setFirebaseUser: (user: FirebaseUser | null) => void;
+  setFirebaseUser: (user: any | null) => void;
   setLoading: (loading: boolean) => void;
   setIsSigningIn: (isSigningIn: boolean) => void;
   setAuthError: (error: string | null) => void;
   setAuthSuccessMessage: (msg: string | null) => void;
+  setAuthModalOpen: (open: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -30,6 +32,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   isSigningIn: false,
   authError: null,
   authSuccessMessage: null,
+  isAuthModalOpen: false,
   setUser: (user) => {
     if (user) {
       try { localStorage.setItem('zk_auth_user', JSON.stringify(user)); } catch {}
@@ -43,5 +46,6 @@ export const useAuthStore = create<AuthState>((set) => ({
   setIsSigningIn: (isSigningIn) => set({ isSigningIn }),
   setAuthError: (authError) => set({ authError }),
   setAuthSuccessMessage: (authSuccessMessage) => set({ authSuccessMessage }),
+  setAuthModalOpen: (isAuthModalOpen) => set({ isAuthModalOpen }),
 }));
 

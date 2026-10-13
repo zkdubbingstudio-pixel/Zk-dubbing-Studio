@@ -1,17 +1,21 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
-  GoogleAuthProvider, 
   getAuth, 
-  browserPopupRedirectResolver, 
   browserLocalPersistence, 
-  setPersistence 
+  setPersistence,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  sendPasswordResetEmail,
+  updateProfile,
+  onAuthStateChanged,
+  type User as FirebaseUser
 } from 'firebase/auth';
 import { initializeFirestore, getFirestore, setLogLevel, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 export const PRODUCTION_DOMAIN = 'zk-voicehub.vercel.app';
 export const PRODUCTION_ORIGIN = 'https://zk-voicehub.vercel.app';
-export const OAUTH_CLIENT_ID = firebaseConfig.oAuthClientId || '268049914182-tp9k4v5ggak7jaca2knujor1c1dif7oj.apps.googleusercontent.com';
 
 // Silence internal Firestore connection logs & timeout warnings in console
 try {
@@ -84,15 +88,16 @@ try {
 }
 export const db = firestoreDb;
 
-// Configure Google Auth Provider
-export const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({
-  prompt: 'select_account',
-});
-googleProvider.addScope('email');
-googleProvider.addScope('profile');
-
-export { browserPopupRedirectResolver, browserLocalPersistence };
+export { 
+  browserLocalPersistence,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  sendPasswordResetEmail,
+  updateProfile,
+  onAuthStateChanged,
+  type FirebaseUser
+};
 
 // Test connection on boot non-blocking and safe
 if (firestoreDb) {

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Search as SearchIcon, Filter, Sparkles, Film } from 'lucide-react';
 import { supabase, executeSupabaseWithRetry } from '../lib/supabase';
 import { normalizeAnime, getGenres, getActiveAnimeTable, getLocalAnimeList } from '../lib/dataService';
@@ -6,11 +7,20 @@ import AnimeCard3D from '../components/AnimeCard3D';
 import GenreChipsBar from '../components/GenreChipsBar';
 
 export default function Search() {
+  const [searchParams] = useSearchParams();
   const [query, setQuery] = useState('');
   const [selectedGenre, setSelectedGenre] = useState<string>('All');
   const [genresList, setGenresList] = useState<string[]>(['All']);
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Sync category or genre from query params
+  useEffect(() => {
+    const genreParam = searchParams.get('genre') || searchParams.get('category');
+    if (genreParam) {
+      setSelectedGenre(genreParam);
+    }
+  }, [searchParams]);
 
   // Load dynamic genres from Supabase
   useEffect(() => {

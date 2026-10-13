@@ -148,8 +148,10 @@ async function customFetchWithTimeout(input: RequestInfo | URL, init?: RequestIn
 
 export const supabase = createClient(supabaseUrl, supabaseKey || 'pending-key', {
   auth: {
-    persistSession: false,
-    autoRefreshToken: false,
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storage: typeof window !== 'undefined' ? window.localStorage : undefined,
   },
   global: {
     fetch: customFetchWithTimeout,

@@ -10,11 +10,15 @@ export interface User {
   uid: string;
   id?: string;
   email: string;
+  name?: string;
   displayName: string;
+  full_name?: string;
   photoURL: string;
-  role: 'user' | 'admin';
+  profilePhoto?: string;
+  role: 'user' | 'admin' | 'owner';
   isBanned?: boolean;
   createdAt: number;
+  lastLogin?: string;
   settings?: UserSettings;
 }
 

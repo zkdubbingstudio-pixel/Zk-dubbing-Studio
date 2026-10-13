@@ -1,17 +1,22 @@
 import { useState, useEffect } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Search, Menu, X, LogOut, Shield, User, Sliders, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Search, Menu, X, LogOut, Shield, User, CheckCircle2, LogIn } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
-import { signInWithGoogle, signOutUser, getFriendlyAuthErrorMessage } from '../lib/authService';
+import { signOutUser, isAuthorizedAdmin } from '../lib/authService';
 import Logo3D from '../components/Logo3D';
 import CyberParticles from '../components/CyberParticles';
 import Footer from '../components/Footer';
+import SideMenu from '../components/SideMenu';
+import AboutModal from '../components/AboutModal';
+import AuthModal from '../components/AuthModal';
+import OwnerToastContainer from '../components/OwnerToastContainer';
+import { subscribeToOwnerNotifications } from '../lib/ownerNotificationService';
 
 export default function RootLayout() {
   const [isScrolled, setIsScrolled] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const { user, firebaseUser, authError, setAuthError, authSuccessMessage, setAuthSuccessMessage } = useAuthStore();
+  const [sideMenuOpen, setSideMenuOpen] = useState(false);
+  const [aboutModalOpen, setAboutModalOpen] = useState(false);
+  const { user, setUser, authSuccessMessage, setAuthSuccessMessage, setAuthModalOpen } = useAuthStore();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -38,32 +43,32 @@ export default function RootLayout() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  const handleLogin = async (preferRedirect = false) => {
-    setIsLoggingIn(true);
-    setAuthError(null);
-    try {
-      const loggedUser = await signInWithGoogle({ preferRedirect });
-      if (loggedUser) {
-        setAuthSuccessMessage(`Welcome back, ${loggedUser.displayName || loggedUser.email}!`);
-      }
-    } catch (error: any) {
-      if (error?.code !== 'auth/popup-closed-by-user') {
-        const friendlyMsg = getFriendlyAuthErrorMessage(error);
-        setAuthError(friendlyMsg);
-      }
-    } finally {
-      setIsLoggingIn(false);
-    }
-  };
-
   const handleLogout = async () => {
     try {
       await signOutUser();
-      navigate('/login', { replace: true });
-    } catch (error: any) {
-      setAuthError(getFriendlyAuthErrorMessage(error));
-    }
+    } catch {}
+    setUser(null);
+    setAuthSuccessMessage('Logged out successfully.');
+    navigate('/', { replace: true });
   };
+
+  const handleNavSignIn = () => {
+    setAuthModalOpen(true);
+  };
+
+  const currentUser = user;
+  const isSignedIn = Boolean(currentUser);
+  const isAdmin = Boolean(currentUser && isAuthorizedAdmin(currentUser?.email));
+
+  // Subscribe owner to real-time notifications across the public site
+  useEffect(() => {
+    if (isAdmin && currentUser?.email) {
+      const unsubscribe = subscribeToOwnerNotifications(currentUser.email);
+      return () => {
+        unsubscribe();
+      };
+    }
+  }, [isAdmin, currentUser?.email]);
 
   return (
     <div className="min-h-screen flex flex-col bg-[#05070b] text-silver-light relative selection:bg-[#00e5ff] selection:text-black">
@@ -74,33 +79,16 @@ export default function RootLayout() {
       <div className="fixed top-0 left-1/4 w-96 h-96 bg-[#00e5ff]/5 rounded-full blur-[120px] pointer-events-none z-0" />
       <div className="fixed bottom-0 right-1/4 w-96 h-96 bg-[#0077b6]/5 rounded-full blur-[140px] pointer-events-none z-0" />
 
-      {/* Signing In Loading Overlay Indicator */}
-      {isLoggingIn && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[80] flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#0a0e17]/95 border border-[#00e5ff]/50 rounded-2xl p-6 sm:p-8 shadow-[0_0_50px_rgba(0,229,255,0.3)] flex flex-col items-center max-w-sm text-center">
-            <div className="relative mb-4">
-              <div className="w-14 h-14 border-3 border-white/10 border-t-[#00e5ff] rounded-full animate-spin shadow-[0_0_25px_rgba(0,229,255,0.6)]" />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#00e5ff] animate-ping" />
-              </div>
-            </div>
-            <h3 className="text-base font-black text-white mb-1 tracking-tight">Authenticating with Google</h3>
-            <p className="text-xs text-silver-light">Connecting to ZK Voice Hub securely...</p>
-            <p className="text-[11px] text-[#00e5ff]/70 mt-3 font-mono">Verifying Firebase Credentials</p>
-          </div>
-        </div>
-      )}
-
       {/* Global Auth Success Toast Notification */}
       {authSuccessMessage && (
-        <div className="fixed top-20 sm:top-24 left-1/2 -translate-x-1/2 w-11/12 max-w-lg z-[70] animate-in fade-in slide-in-from-top-4 duration-300">
+        <div className="fixed top-20 sm:top-24 left-1/2 -translate-x-1/2 w-11/12 max-w-lg z-[150] animate-in fade-in slide-in-from-top-4 duration-300">
           <div className="bg-[#051a14]/95 border border-emerald-500/60 rounded-2xl p-4 shadow-[0_0_35px_rgba(16,185,129,0.35)] backdrop-blur-xl flex items-center gap-3.5">
             <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.3)]">
               <CheckCircle2 className="w-5 h-5" />
             </div>
             <div className="flex-1 min-w-0">
               <h4 className="text-xs font-black text-emerald-300 uppercase tracking-widest mb-0.5">
-                Authentication Successful
+                Notification
               </h4>
               <p className="text-xs text-white/95 font-semibold break-words">
                 {authSuccessMessage}
@@ -110,38 +98,6 @@ export default function RootLayout() {
               onClick={() => setAuthSuccessMessage(null)}
               className="p-1 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
               aria-label="Dismiss message"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Global Auth Error Alert Notification */}
-      {authError && (
-        <div className="fixed top-20 sm:top-24 left-1/2 -translate-x-1/2 w-11/12 max-w-2xl z-[60] animate-in fade-in slide-in-from-top-4 duration-300">
-          <div className="bg-[#120a14]/95 border border-red-500/50 rounded-2xl p-4 shadow-[0_0_30px_rgba(239,68,68,0.3)] backdrop-blur-xl flex items-start gap-3.5">
-            <div className="w-8 h-8 rounded-xl bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 shrink-0 mt-0.5">
-              <AlertTriangle className="w-4 h-4" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h4 className="text-sm font-bold text-white mb-0.5 flex items-center gap-2">
-                Google Sign-In Alert
-              </h4>
-              <p className="text-xs text-red-200/90 leading-relaxed break-words">
-                {authError}
-              </p>
-              {authError.includes('Authorized Domains') && (
-                <div className="mt-2.5 pt-2 border-t border-red-500/20 text-[11px] text-white/70">
-                  <span className="font-bold text-brand">Action Required: </span>
-                  Go to <a href="https://console.firebase.google.com" target="_blank" rel="noreferrer" className="underline text-brand hover:text-white">Firebase Console</a> → Authentication → Settings → Authorized Domains → Add <code className="bg-black/60 px-1.5 py-0.5 rounded text-white border border-white/10 font-bold">{typeof window !== 'undefined' ? window.location.hostname : 'domain'}</code>
-                </div>
-              )}
-            </div>
-            <button
-              onClick={() => setAuthError(null)}
-              className="p-1 rounded-lg text-white/40 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
-              aria-label="Dismiss error"
             >
               <X className="w-4 h-4" />
             </button>
@@ -185,15 +141,23 @@ export default function RootLayout() {
                 Browse & Search
               </Link>
               <Link
-                to="/settings"
-                className={`px-3 py-1.5 rounded-full text-xs lg:text-sm font-bold transition-all duration-200 ${
-                  location.pathname === '/settings'
-                    ? 'bg-[#00e5ff] text-black shadow-[0_0_15px_rgba(0,229,255,0.6)]'
-                    : 'text-silver hover:text-white hover:bg-white/5'
-                }`}
+                to="/search?tab=categories"
+                className="px-3 py-1.5 rounded-full text-xs lg:text-sm font-bold text-silver hover:text-white hover:bg-white/5 transition-all duration-200"
               >
-                Settings
+                Categories
               </Link>
+              {isSignedIn && (
+                <Link
+                  to="/settings"
+                  className={`px-3 py-1.5 rounded-full text-xs lg:text-sm font-bold transition-all duration-200 ${
+                    location.pathname === '/settings'
+                      ? 'bg-[#00e5ff] text-black shadow-[0_0_15px_rgba(0,229,255,0.6)]'
+                      : 'text-silver hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  Settings
+                </Link>
+              )}
             </nav>
 
             {/* Desktop Actions */}
@@ -206,53 +170,76 @@ export default function RootLayout() {
                 <Search className="w-5 h-5" />
               </Link>
 
-              {firebaseUser ? (
-                <div className="flex items-center space-x-3 bg-[#0a0e17]/80 backdrop-blur-xl pl-3 pr-2 py-1.5 rounded-full border border-white/10">
-                  {user?.role === 'admin' && (
-                    <Link
-                      to="/admin"
-                      className="flex items-center gap-1 text-xs font-black px-2.5 py-1 bg-[#00e5ff]/20 text-brand rounded-full border border-[#00e5ff]/30 hover:bg-[#00e5ff] hover:text-black transition-all"
-                    >
-                      <Shield className="w-3 h-3" />
-                      ADMIN
-                    </Link>
-                  )}
+              {/* Admin Panel button - ONLY displayed for zkdubbingstudio@gmail.com */}
+              {isAdmin && (
+                <Link
+                  to="/admin"
+                  className="flex items-center gap-1.5 text-xs font-black px-3.5 py-1.5 bg-[#00e5ff]/20 text-[#00e5ff] rounded-full border border-[#00e5ff]/40 hover:bg-[#00e5ff] hover:text-black transition-all shadow-[0_0_15px_rgba(0,229,255,0.25)]"
+                >
+                  <Shield className="w-3.5 h-3.5" />
+                  ADMIN
+                </Link>
+              )}
+
+              {/* IF SIGNED IN: Profile Avatar & Logout */}
+              {isSignedIn ? (
+                <>
                   <Link
                     to="/profile"
-                    className="w-8 h-8 rounded-full overflow-hidden border-2 border-white/20 hover:border-brand transition-colors relative group"
-                    title={firebaseUser.displayName || 'Profile'}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all ${
+                      location.pathname === '/profile'
+                        ? 'bg-[#00e5ff]/20 border-brand text-brand shadow-[0_0_15px_rgba(0,229,255,0.3)]'
+                        : 'bg-[#0a0e17]/80 hover:bg-white/10 border-white/10 text-white'
+                    }`}
+                    title="Profile"
                   >
-                    <img
-                      src={
-                        firebaseUser.photoURL ||
-                        `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                          firebaseUser.displayName || 'Anime Fan'
-                        )}&background=00e5ff&color=000`
-                      }
-                      alt="Profile"
-                      className="w-full h-full object-cover"
-                    />
+                    <div className="w-6 h-6 rounded-full overflow-hidden bg-brand/20 flex items-center justify-center border border-brand/40">
+                      {(user?.photoURL || user?.profilePhoto) ? (
+                        <img
+                          src={user?.photoURL || user?.profilePhoto}
+                          alt="Profile"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <User className="w-3.5 h-3.5 text-brand" />
+                      )}
+                    </div>
+                    <span className="text-xs font-bold">
+                      {(user?.name || user?.displayName) || 'Profile'}
+                    </span>
                   </Link>
+
                   <button
                     onClick={handleLogout}
                     title="Sign Out"
-                    className="p-1.5 text-silver-dark hover:text-red-400 hover:bg-white/5 rounded-full transition-colors cursor-pointer"
+                    className="p-2 text-silver-dark hover:text-red-400 hover:bg-white/5 rounded-full transition-colors cursor-pointer"
                   >
                     <LogOut className="w-4 h-4" />
                   </button>
-                </div>
+                </>
               ) : (
+                /* IF NOT SIGNED IN: Highlighted Sign In button on desktop */
                 <button
-                  onClick={() => handleLogin(false)}
-                  disabled={isLoggingIn}
-                  className="btn-3d-cyan px-6 py-2.5 text-xs sm:text-sm font-black tracking-wider cursor-pointer disabled:opacity-50"
+                  onClick={handleNavSignIn}
+                  className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-gradient-to-r from-[#00e5ff] to-[#00b4d8] text-black font-extrabold text-xs uppercase tracking-wider shadow-[0_0_15px_rgba(0,229,255,0.35)] hover:shadow-[0_0_22px_rgba(0,229,255,0.55)] hover:scale-105 active:scale-95 transition-all cursor-pointer"
                 >
-                  {isLoggingIn ? 'SIGNING IN...' : 'SIGN IN'}
+                  <LogIn className="w-3.5 h-3.5 shrink-0" />
+                  <span>Sign In</span>
                 </button>
               )}
+
+              {/* 3-Line Menu hamburger button on desktop */}
+              <button
+                onClick={() => setSideMenuOpen(true)}
+                className="text-silver hover:text-brand p-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 transition-colors cursor-pointer"
+                aria-label="Open side menu"
+                title="Menu"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
             </div>
 
-            {/* Mobile menu button */}
+            {/* Mobile menu action bar */}
             <div className="md:hidden flex items-center space-x-2">
               <Link
                 to="/search"
@@ -261,103 +248,35 @@ export default function RootLayout() {
               >
                 <Search className="w-5 h-5" />
               </Link>
+
+              {/* 3-Line Menu button on mobile */}
               <button
-                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                className="text-silver hover:text-white p-2 rounded-lg bg-white/5 border border-white/10"
-                aria-label="Toggle Menu"
+                onClick={() => setSideMenuOpen(true)}
+                className="text-silver hover:text-white p-2 rounded-xl bg-white/5 border border-white/10 cursor-pointer"
+                aria-label="Open side menu"
               >
-                {mobileMenuOpen ? <X className="w-6 h-6 text-brand" /> : <Menu className="w-6 h-6" />}
+                <Menu className="w-6 h-6 text-[#00e5ff]" />
               </button>
             </div>
           </div>
         </div>
-
-        {/* Mobile Navigation Drawer */}
-        {mobileMenuOpen && (
-          <div className="md:hidden glass-cyber border-t border-white/10 animate-in slide-in-from-top duration-300">
-            <div className="px-4 py-4 space-y-2">
-              <Link
-                to="/"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block px-4 py-2.5 rounded-xl text-sm font-bold text-silver-light hover:bg-[#00e5ff]/10 hover:text-brand transition-colors"
-              >
-                Home
-              </Link>
-              <Link
-                to="/search"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block px-4 py-2.5 rounded-xl text-sm font-bold text-silver-light hover:bg-[#00e5ff]/10 hover:text-brand transition-colors"
-              >
-                Browse & Search
-              </Link>
-              <Link
-                to="/settings"
-                onClick={() => setMobileMenuOpen(false)}
-                className="block px-4 py-2.5 rounded-xl text-sm font-bold text-silver-light hover:bg-[#00e5ff]/10 hover:text-brand transition-colors"
-              >
-                Settings
-              </Link>
-
-              <div className="pt-2 border-t border-white/10">
-                {!firebaseUser ? (
-                  <div className="space-y-2 mt-2">
-                    <button
-                      onClick={() => {
-                        handleLogin(false);
-                        setMobileMenuOpen(false);
-                      }}
-                      disabled={isLoggingIn}
-                      className="w-full btn-3d-cyan py-3 text-sm font-black text-center cursor-pointer disabled:opacity-50"
-                    >
-                      {isLoggingIn ? 'SIGNING IN...' : 'SIGN IN WITH GOOGLE'}
-                    </button>
-                    <button
-                      onClick={() => {
-                        handleLogin(true);
-                        setMobileMenuOpen(false);
-                      }}
-                      className="w-full py-2 text-xs font-bold text-silver-dark hover:text-brand text-center bg-white/5 rounded-xl border border-white/5 transition-colors"
-                    >
-                      Android / Mobile Redirect Mode
-                    </button>
-                  </div>
-                ) : (
-                  <div className="space-y-2 pt-1">
-                    <Link
-                      to="/profile"
-                      onClick={() => setMobileMenuOpen(false)}
-                      className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-bold text-white bg-white/5 hover:bg-white/10"
-                    >
-                      <User className="w-4 h-4 text-brand" />
-                      <span>My Profile</span>
-                    </Link>
-                    {user?.role === 'admin' && (
-                      <Link
-                        to="/admin"
-                        onClick={() => setMobileMenuOpen(false)}
-                        className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-bold text-[#00e5ff] bg-[#00e5ff]/10 border border-[#00e5ff]/20"
-                      >
-                        <Shield className="w-4 h-4" />
-                        <span>Admin Dashboard</span>
-                      </Link>
-                    )}
-                    <button
-                      onClick={() => {
-                        handleLogout();
-                        setMobileMenuOpen(false);
-                      }}
-                      className="w-full text-left flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-bold text-red-400 hover:bg-red-500/10"
-                    >
-                      <LogOut className="w-4 h-4" />
-                      <span>Sign Out</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
       </header>
+
+      {/* Slide-out Side Menu Drawer (3-line menu) */}
+      <SideMenu
+        isOpen={sideMenuOpen}
+        onClose={() => setSideMenuOpen(false)}
+        onOpenAbout={() => setAboutModalOpen(true)}
+      />
+
+      {/* About Studio Modal */}
+      <AboutModal
+        isOpen={aboutModalOpen}
+        onClose={() => setAboutModalOpen(false)}
+      />
+
+      {/* Email + Password Auth Modal */}
+      <AuthModal />
 
       {/* Main Outlet with Top Margin for Navbar */}
       <main className="flex-1 w-full pt-20 relative z-10">
@@ -366,6 +285,9 @@ export default function RootLayout() {
 
       {/* Upgraded Professional Anime Streaming Footer */}
       <Footer />
+
+      {/* Real-time Owner Toast Container for Owner (zkdubbingstudio@gmail.com) */}
+      <OwnerToastContainer />
     </div>
   );
 }

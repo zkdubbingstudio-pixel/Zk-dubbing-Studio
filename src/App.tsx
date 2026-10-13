@@ -4,20 +4,15 @@
  */
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, lazy, Suspense } from 'react';
-import { supabase } from './lib/supabase';
-import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from './lib/firebase';
 import { useAuthStore } from './store/authStore';
-import { saveUserToFirestore, processRedirectResult, getFriendlyAuthErrorMessage, isAuthorizedAdmin } from './lib/authService';
-import { User } from './types';
+import { auth, onAuthStateChanged } from './lib/firebase';
+import { getActiveAuthUser, loadUserProfileFromSupabase } from './lib/authService';
 
 import RootLayout from './layouts/RootLayout';
 import AdminLayout from './layouts/AdminLayout';
-import ProtectedRoute from './components/ProtectedRoute';
 
-// Eager load Home & Login for instant First Contentful Paint
+// Eager load Home for instant First Contentful Paint
 import Home from './pages/Home';
-import Login from './pages/Login';
 
 // Lazy loaded client pages for optimal performance & code splitting
 const AnimeDetails = lazy(() => import('./pages/AnimeDetails'));
@@ -47,96 +42,58 @@ function PageFallback() {
 }
 
 export default function App() {
-  const { setFirebaseUser, setUser, setLoading, setAuthError, setAuthSuccessMessage } = useAuthStore();
+  const { setUser, setFirebaseUser, setLoading } = useAuthStore();
 
   useEffect(() => {
-    // 0. Remove any cached clients / storage from old Supabase project (Requirement 3)
-    try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        Object.keys(localStorage).forEach((key) => {
-          if (key.startsWith('sb-') || key.toLowerCase().includes('supabase')) {
-            localStorage.removeItem(key);
-          }
-        });
-      }
-    } catch {}
-
-    // 1. Process redirect result if returning from mobile Google Sign-In redirect flow
-    processRedirectResult()
-      .then((userRecord) => {
-        if (userRecord) {
-          setUser(userRecord);
-          setAuthSuccessMessage(`Welcome back, ${userRecord.displayName || userRecord.email}!`);
+    // 1. Initial fast user hydration from cached profile
+    getActiveAuthUser()
+      .then((user) => {
+        if (user) {
+          setUser(user);
         }
       })
-      .catch((err: any) => {
-        if (err?.code !== 'auth/popup-closed-by-user') {
-          const msg = getFriendlyAuthErrorMessage(err);
-          setAuthError(msg);
-        }
+      .catch(() => {})
+      .finally(() => {
+        setLoading(false);
       });
 
-    // 2. Listen for auth changes, persist session, and sync user document to Firestore
-    if (!auth) {
-      setLoading(false);
-      return;
+    // 2. Firebase real-time auth state listener (keeps user logged in across refresh)
+    let unsubscribe: (() => void) | undefined;
+    if (auth) {
+      unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+        if (fbUser) {
+          setFirebaseUser(fbUser);
+          try {
+            const userProfile = await loadUserProfileFromSupabase(
+              fbUser.uid,
+              fbUser.email,
+              fbUser.displayName
+            );
+            setUser(userProfile);
+          } catch (err) {
+            console.warn('Notice loading user profile from Supabase:', err);
+          }
+        } else {
+          setFirebaseUser(null);
+          setUser(null);
+        }
+        setLoading(false);
+      });
     }
 
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        setFirebaseUser(firebaseUser);
-        try {
-          const userRecord = await saveUserToFirestore(firebaseUser);
-          setUser(userRecord);
-        } catch (err) {
-          console.error('Error saving user to Firestore:', err);
-          const email = (firebaseUser.email || '').toLowerCase();
-          const fallbackUser: User = {
-            uid: firebaseUser.uid,
-            id: firebaseUser.uid,
-            email,
-            displayName: firebaseUser.displayName || email.split('@')[0] || 'Anime Fan',
-            photoURL: firebaseUser.photoURL || '',
-            role: isAuthorizedAdmin(email) ? 'admin' : 'user',
-            createdAt: Date.now(),
-            settings: {
-              appearance: 'Dark',
-              defaultQuality: '1080p',
-              autoplayNext: true,
-              rememberPosition: true,
-              newEpisodeNotifications: true,
-            },
-          };
-          setUser(fallbackUser);
-        } finally {
-          setLoading(false);
-        }
-      } else {
-        setFirebaseUser(null);
-        setUser(null);
-        setLoading(false);
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
       }
-    });
-
-    return () => unsubscribe();
-  }, [setFirebaseUser, setUser, setLoading, setAuthError]);
+    };
+  }, [setUser, setFirebaseUser, setLoading]);
 
   return (
     <BrowserRouter>
       <Suspense fallback={<PageFallback />}>
         <Routes>
-          {/* Public Login Route (Requirement 8) */}
-          <Route path="/login" element={<Login />} />
-
-          {/* Main User Routes - Protected (Requirement 8: Protect all pages except Login) */}
-          <Route 
-            path="/" 
-            element={
-              <ProtectedRoute>
-                <RootLayout />
-              </ProtectedRoute>
-            }
-          >
+          {/* Main User Routes - Open directly to all visitors without signing in */}
+          <Route path="/" element={<RootLayout />}>
             <Route index element={<Home />} />
             <Route path="search" element={<Search />} />
             <Route path="browse" element={<Search />} />
@@ -151,15 +108,8 @@ export default function App() {
             <Route path="watch/:animeId/:seasonId/:id" element={<WatchPage />} />
           </Route>
 
-          {/* Admin Management Routes - Protected */}
-          <Route 
-            path="/admin" 
-            element={
-              <ProtectedRoute>
-                <AdminLayout />
-              </ProtectedRoute>
-            }
-          >
+          {/* Admin Management Routes - Protected with Access Denied gatekeeping for unauthorized visitors */}
+          <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<AdminDashboard />} />
             <Route path="anime" element={<AdminAnime />} />
             <Route path="seasons" element={<AdminSeasons />} />
@@ -171,7 +121,7 @@ export default function App() {
             <Route path="security" element={<AdminSecurity />} />
           </Route>
 
-          {/* Catch-all route */}
+          {/* Catch-all route (including any /login requests redirected to home) */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>

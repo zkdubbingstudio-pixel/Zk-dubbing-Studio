@@ -1,3 +1,5 @@
+import { dispatchOwnerNotification } from './ownerNotificationService';
+
 export interface ActivityLogItem {
   id: string;
   action: string;
@@ -8,6 +10,19 @@ export interface ActivityLogItem {
 }
 
 const STORAGE_KEY = 'zk_admin_activity_log';
+
+function getCategoryUrl(category: ActivityLogItem['category']): string {
+  switch (category) {
+    case 'anime': return '/admin/anime';
+    case 'season': return '/admin/seasons';
+    case 'episode': return '/admin/episodes';
+    case 'user': return '/admin/users';
+    case 'media': return '/admin/media';
+    case 'settings': return '/admin/settings';
+    case 'security': return '/admin/security';
+    default: return '/admin';
+  }
+}
 
 export function getAdminActivityLogs(): ActivityLogItem[] {
   try {
@@ -68,6 +83,16 @@ export function logAdminActivity(
     logs.unshift(newLog);
     if (logs.length > 100) logs.pop();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(logs));
+
+    // Alert the owner (zkdubbingstudio@gmail.com) via real-time toast notification
+    dispatchOwnerNotification({
+      type: 'admin_action',
+      title: `Admin Action: ${action}`,
+      details,
+      category,
+      actionUrl: getCategoryUrl(category),
+      timestamp: newLog.timestamp,
+    }).catch(() => {});
   } catch {}
 }
 

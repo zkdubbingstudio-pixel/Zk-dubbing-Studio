@@ -7,10 +7,13 @@
       "properties": {
         "uid": { "type": "string" },
         "email": { "type": "string" },
+        "name": { "type": "string" },
         "displayName": { "type": "string" },
         "photoURL": { "type": "string" },
+        "profilePhoto": { "type": "string" },
         "role": { "type": "string", "enum": ["user", "admin"] },
         "createdAt": { "type": "number" },
+        "lastLogin": { "type": "string" },
         "lastLoginAt": { "type": "string" }
       },
       "required": ["uid", "email"]
@@ -45,6 +48,22 @@
         "server3Url": { "type": "string" }
       },
       "required": ["animeId", "episodeNumber"]
+    },
+    "AdminNotification": {
+      "title": "AdminNotification",
+      "description": "Live real-time alerts for the owner when users register or admin operations occur",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["new_user", "admin_action"] },
+        "title": { "type": "string" },
+        "details": { "type": "string" },
+        "category": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "userName": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "read": { "type": "boolean" }
+      },
+      "required": ["type", "title", "timestamp"]
     }
   },
   "firestore": {
@@ -59,6 +78,10 @@
     "/episodes/{episodeId}": {
       "schema": "Episode",
       "description": "Anime episodes collection"
+    },
+    "/admin_notifications/{notificationId}": {
+      "schema": "AdminNotification",
+      "description": "Real-time owner notifications collection"
     }
   }
 }

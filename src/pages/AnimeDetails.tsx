@@ -36,9 +36,15 @@ export default function AnimeDetails() {
   const effectiveUserId = user?.uid || firebaseUser?.uid || null;
 
   useEffect(() => {
-    if (effectiveUserId && id) {
+    if (!id) return;
+    if (effectiveUserId) {
       isFavorite(effectiveUserId, id).then(setIsFav).catch(() => {});
       isInWatchlist(effectiveUserId, id).then(setInWl).catch(() => {});
+    } else {
+      try {
+        const localFavs = JSON.parse(localStorage.getItem('zk_local_favorites') || '[]');
+        setIsFav(localFavs.some((f: any) => f.id === id || f.anime_id === id));
+      } catch {}
     }
   }, [effectiveUserId, id]);
 
@@ -58,16 +64,34 @@ export default function AnimeDetails() {
   }, [isDropdownOpen]);
 
   const handleToggleFavorite = async () => {
-    if (!effectiveUserId || !anime) return;
+    if (!anime) return;
     if (isFav) {
-      await removeFavorite(effectiveUserId, anime.id);
+      if (effectiveUserId) {
+        await removeFavorite(effectiveUserId, anime.id);
+      }
+      try {
+        const localFavs = JSON.parse(localStorage.getItem('zk_local_favorites') || '[]');
+        const filtered = localFavs.filter((f: any) => f.id !== anime.id && f.anime_id !== anime.id);
+        localStorage.setItem('zk_local_favorites', JSON.stringify(filtered));
+      } catch {}
       setIsFav(false);
     } else {
-      await addFavorite(effectiveUserId, {
+      const favObj = {
         id: anime.id,
+        anime_id: anime.id,
         title: anime.title,
-        posterUrl: anime.posterUrl || anime.poster_url || anime.bannerUrl || anime.banner_url
-      });
+        anime_title: anime.title,
+        posterUrl: anime.posterUrl || anime.poster_url || anime.bannerUrl || anime.banner_url,
+        poster_url: anime.posterUrl || anime.poster_url || anime.bannerUrl || anime.banner_url,
+      };
+      if (effectiveUserId) {
+        await addFavorite(effectiveUserId, favObj);
+      }
+      try {
+        const localFavs = JSON.parse(localStorage.getItem('zk_local_favorites') || '[]');
+        localFavs.unshift(favObj);
+        localStorage.setItem('zk_local_favorites', JSON.stringify(localFavs));
+      } catch {}
       setIsFav(true);
     }
   };

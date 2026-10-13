@@ -420,7 +420,7 @@ export default function Footer() {
                     Your privacy is important to us. ZK Voice Hub does not sell, rent, or trade your personal information to third parties.
                   </p>
                   <p>
-                    <strong>Data Stored:</strong> When creating an account or viewing anime, we store basic watch progress, watchlist items, and account profiles using secure Google Firebase authentication and encrypted local storage.
+                    <strong>Data Stored:</strong> When creating an account or viewing anime, we store basic watch progress, watchlist items, and account profiles using secure Supabase authentication and encrypted storage.
                   </p>
                   <p>
                     <strong>Cookies & Local Storage:</strong> We use minimal client-side storage to remember your playback volume, selected server preference (Server 1 vs Server 2), and session authorization.
