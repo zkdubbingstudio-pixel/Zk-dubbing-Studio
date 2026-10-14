@@ -52,12 +52,8 @@ export default function WatchPage() {
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isVideoLoading, setIsVideoLoading] = useState(true);
   const [selectedServer, setSelectedServer] = useState<'server1' | 'server2' | 'server3'>('server1');
   const [deadServers, setDeadServers] = useState<Set<'server1' | 'server2' | 'server3'>>(new Set());
-  const [switchNotice, setSwitchNotice] = useState<string | null>(null);
-  const [retryCount, setRetryCount] = useState<number>(0);
-  const isCurrentServerLoadedRef = useRef<boolean>(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const navigate = useNavigate();
@@ -108,10 +104,23 @@ export default function WatchPage() {
   const prevEpisode = currentIndex > 0 ? seasonEpisodes[currentIndex - 1] : null;
   const nextEpisode = currentIndex !== -1 && currentIndex < seasonEpisodes.length - 1 ? seasonEpisodes[currentIndex + 1] : null;
 
+  // Immediate episode switch if episode is already in seasonEpisodes (Requirement 2 & 6)
+  useEffect(() => {
+    if (paramId && seasonEpisodes.length > 0) {
+      const match = seasonEpisodes.find(ep => ep.id === paramId || String(ep.episodeNumber) === String(paramId));
+      if (match && match.id !== episode?.id) {
+        setEpisode(match);
+        setLoading(false);
+      }
+    }
+  }, [paramId, seasonEpisodes, episode?.id]);
+
   // Load episode details & anime metadata (Searches Firestore + Supabase)
   useEffect(() => {
     let isMounted = true;
-    setLoading(true);
+    if (!episode) {
+      setLoading(true);
+    }
     setError(null);
     
     const fetchData = async () => {
@@ -204,7 +213,6 @@ export default function WatchPage() {
           } else {
             setSeasonEpisodes([epData]);
           }
-          setIsVideoLoading(true);
           setLoading(false);
           setError(null);
         }
@@ -318,7 +326,6 @@ export default function WatchPage() {
       }
     } catch {}
     setDeadServers(new Set());
-    setSwitchNotice(null);
   }, [activeEpId]);
 
   // Requirement 4: Show only servers that actually have a valid video URL
@@ -359,19 +366,14 @@ export default function WatchPage() {
 
   const activeStreamUrl = useMemo(() => {
     if (!effectiveServer) return '';
-    let url = effectiveServer === 'server1' ? server1Url :
-              effectiveServer === 'server2' ? server2Url :
-              effectiveServer === 'server3' ? server3Url : '';
-    if (url && retryCount > 0) {
-      const sep = url.includes('?') ? '&' : '?';
-      return `${url}${sep}_zk_retry=${retryCount}`;
-    }
-    return url;
-  }, [effectiveServer, server1Url, server2Url, server3Url, retryCount]);
+    return effectiveServer === 'server1' ? server1Url :
+           effectiveServer === 'server2' ? server2Url :
+           effectiveServer === 'server3' ? server3Url : '';
+  }, [effectiveServer, server1Url, server2Url, server3Url]);
 
-  // Requirement 1, 2, 5, 6, 7: Automatic Failover when a server times out (8s), 403, 404, or fails
+  // Immediate failover when a server fails
   const handleServerFailure = useCallback((failedServer: 'server1' | 'server2' | 'server3', reason?: string) => {
-    console.warn(`[Video Player] ${failedServer} failed (${reason || 'unreachable'}). Switching to next available server...`);
+    console.warn(`[Video Player] ${failedServer} failed (${reason || 'unreachable'}). Switching server...`);
 
     setDeadServers(prev => {
       if (prev.has(failedServer)) return prev;
@@ -387,19 +389,7 @@ export default function WatchPage() {
       // Check remaining valid servers
       const remaining = validServers.filter(s => !nextSet.has(s));
       if (remaining.length > 0) {
-        const nextCandidate = remaining[0];
-        const failedName = failedServer === 'server1' ? 'Server 1' : failedServer === 'server2' ? 'Server 2' : 'Server 3';
-        const nextName = nextCandidate === 'server1' ? 'Server 1' : nextCandidate === 'server2' ? 'Server 2' : 'Server 3';
-        setSwitchNotice(`${failedName} did not respond. Automatically playing ${nextName}...`);
-        setSelectedServer(nextCandidate);
-        setIsVideoLoading(true);
-        isCurrentServerLoadedRef.current = false;
-        setRetryCount(0);
-        setTimeout(() => setSwitchNotice(null), 6000);
-      } else {
-        // Requirement 10: Show a proper error only if every server fails
-        setIsVideoLoading(false);
-        setSwitchNotice(null);
+        setSelectedServer(remaining[0]);
       }
 
       return nextSet;
@@ -416,13 +406,9 @@ export default function WatchPage() {
     if (validServers.length > 0) {
       setSelectedServer(validServers[0]);
     }
-    isCurrentServerLoadedRef.current = false;
-    setRetryCount(prev => prev + 1);
-    setIsVideoLoading(true);
-    setSwitchNotice(null);
   };
 
-  // Requirement 8: Preload player and video metadata / preconnect DNS for buffering
+  // Preconnect DNS for streaming origins
   useEffect(() => {
     const urls = [server1Url, server2Url, server3Url].filter(Boolean);
     urls.forEach(u => {
@@ -445,78 +431,9 @@ export default function WatchPage() {
     });
   }, [server1Url, server2Url, server3Url]);
 
-  // Requirement 2, 3, 9: Watchdog timer for timeout / 403 / 404 / no response within 8s
-  useEffect(() => {
-    if (!effectiveServer || !activeStreamUrl) {
-      setIsVideoLoading(false);
-      return;
-    }
-
-    setIsVideoLoading(true);
-    isCurrentServerLoadedRef.current = false;
-
-    let isMounted = true;
-    const currentServer = effectiveServer;
-
-    // Fast check for 403 / 404 via HEAD request
-    const abortCtrl = new AbortController();
-    const probe = async () => {
-      try {
-        const res = await fetch(activeStreamUrl, {
-          method: 'HEAD',
-          signal: abortCtrl.signal,
-          headers: isDirectVideo(activeStreamUrl) ? { Range: 'bytes=0-0' } : {}
-        });
-        if (!isMounted) return;
-        if (res.status === 403 || res.status === 404 || res.status === 410) {
-          console.warn(`[Video Player] ${currentServer} returned ${res.status}. Failing server immediately.`);
-          handleServerFailure(currentServer, `HTTP ${res.status}`);
-        }
-      } catch {}
-    };
-    probe();
-
-    // Requirement 2: 8 seconds timeout - if server returns timeout or no response within 8s, switch automatically
-    const timer8s = setTimeout(() => {
-      if (isMounted && !isCurrentServerLoadedRef.current) {
-        console.warn(`[Video Player] ${currentServer} has not responded within 8 seconds.`);
-        handleServerFailure(currentServer, 'Timeout after 8 seconds');
-      }
-    }, 8000);
-
-    // Requirement 9: 10-second timeout for embeds
-    let embedTimer10s: NodeJS.Timeout | null = null;
-    if (!isDirectVideo(activeStreamUrl)) {
-      embedTimer10s = setTimeout(() => {
-        if (isMounted && !isCurrentServerLoadedRef.current) {
-          console.warn(`[Video Player] Embed ${currentServer} timed out after 10 seconds.`);
-          handleServerFailure(currentServer, 'Embed timed out after 10 seconds');
-        }
-      }, 10000);
-    }
-
-    // Requirement 3: Never keep showing "Initializing Player" forever (11s max hard cutoff)
-    const maxSafetyTimer = setTimeout(() => {
-      if (isMounted) {
-        setIsVideoLoading(false);
-      }
-    }, 11000);
-
-    return () => {
-      isMounted = false;
-      abortCtrl.abort();
-      clearTimeout(timer8s);
-      if (embedTimer10s) clearTimeout(embedTimer10s);
-      clearTimeout(maxSafetyTimer);
-    };
-  }, [effectiveServer, activeStreamUrl, handleServerFailure]);
-
   const handleSelectServer = (server: 'server1' | 'server2' | 'server3') => {
     if (effectiveServer !== server && aliveServers.includes(server)) {
       setSelectedServer(server);
-      isCurrentServerLoadedRef.current = false;
-      setIsVideoLoading(true);
-      setSwitchNotice(null);
       if (activeEpId) {
         try {
           localStorage.setItem(`zk_selected_server_${activeEpId}`, server);
@@ -601,122 +518,52 @@ export default function WatchPage() {
 
              {/* Player Container (Server 1 Abyss / Server 2 FileMoon / Server 3 VDOHide / Direct Video Player) */}
              <div className="w-full aspect-video relative rounded-2xl overflow-hidden border border-brand shadow-[0_0_20px_rgba(0,229,255,0.3)] bg-black">
-                {/* Switch Notification Banner */}
-                {switchNotice && (
-                  <div className="absolute top-3 left-3 right-3 z-30 bg-[#0c1824]/95 border border-brand/50 rounded-xl px-4 py-2.5 flex items-center justify-between backdrop-blur-md shadow-[0_0_20px_rgba(0,229,255,0.25)] animate-in fade-in duration-200">
-                    <div className="flex items-center gap-2.5">
-                      <RotateCcw className="w-4 h-4 text-brand animate-spin shrink-0" />
-                      <span className="text-cyan-200 text-xs font-semibold">{switchNotice}</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Loading Spinner while player initializes or switches (Requirements 3 & 6) */}
-                {isVideoLoading && activeStreamUrl && aliveServers.length > 0 && (
-                  <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/85 backdrop-blur-[4px] pointer-events-none transition-opacity duration-300">
-                    <div className="relative flex items-center justify-center">
-                      <div className="w-16 h-16 border-4 border-white/10 border-t-[#00e5ff] rounded-full animate-spin"></div>
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <Play className="w-6 h-6 text-[#00e5ff] fill-[#00e5ff] opacity-80 ml-0.5" />
-                      </div>
-                    </div>
-                    <p className="text-white text-sm mt-4 font-bold tracking-wide">
-                      {switchNotice ? 'Switching Server...' : retryCount > 0 ? 'Retrying Stream Server...' : 'Initializing Player...'}
-                    </p>
-                    <div className="flex items-center gap-2 mt-1.5">
-                      <span className="w-2 h-2 rounded-full bg-[#00e5ff] animate-ping"></span>
-                      <p className="text-white/50 text-xs font-medium">
-                        Connecting to {effectiveServer === 'server1' ? 'Server 1 (Abyss)' : effectiveServer === 'server2' ? 'Server 2 (FileMoon)' : 'Server 3 (VDOHide)'}
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Requirement 10: Show a proper error ONLY if every server fails (or if no valid URL exists) */}
+                {/* Requirement 3: If the server is unavailable, show only: "Server unavailable. Please try another server." */}
                 {(!activeStreamUrl || aliveServers.length === 0) ? (
                     <div className="w-full h-full flex flex-col items-center justify-center bg-black/95 p-6 text-center">
                         <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 mb-4 shadow-[0_0_25px_rgba(239,68,68,0.25)]">
                           <AlertCircle className="w-8 h-8" />
                         </div>
-                        <p className="text-white text-lg sm:text-xl font-bold mb-1">
-                          {validServers.length === 0 ? 'No Streaming Sources Available' : 'All Streaming Servers Unavailable'}
+                        <p className="text-white text-base sm:text-lg font-bold mb-4">
+                          Server unavailable. Please try another server.
                         </p>
-                        <p className="text-white/60 text-xs sm:text-sm max-w-md mb-6 leading-relaxed">
-                          {validServers.length === 0
-                            ? 'This episode does not have any streaming server URLs configured yet.'
-                            : `We tried connecting to all available video servers (${validServers.map(s => s === 'server1' ? 'Server 1 (Abyss)' : s === 'server2' ? 'Server 2 (FileMoon)' : 'Server 3 (VDOHide)').join(', ')}), but none responded within the time limit.`}
-                        </p>
-                        <div className="flex flex-wrap items-center justify-center gap-3">
-                          {validServers.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={handleRetryAll}
-                              className="px-5 py-2.5 rounded-xl bg-brand text-black font-bold text-xs hover:brightness-110 flex items-center gap-2 transition-all cursor-pointer shadow-[0_0_15px_rgba(0,229,255,0.4)]"
-                            >
-                              <RotateCcw className="w-4 h-4" />
-                              Retry All Servers
-                            </button>
-                          )}
-                          {nextEpisode && (
-                            <Link
-                              to={`/watch/${nextEpisode.id || (nextEpisode as any)._id}`}
-                              className="px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center gap-2 transition-all border border-white/10"
-                            >
-                              <SkipForward className="w-4 h-4" />
-                              Next Episode
-                            </Link>
-                          )}
-                          <Link
-                            to={anime ? `/anime/${anime.id}` : '/'}
-                            className="px-5 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/70 hover:text-white font-medium text-xs transition-all border border-white/5"
+                        {validServers.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleRetryAll}
+                            className="px-5 py-2.5 rounded-xl bg-brand text-black font-bold text-xs hover:brightness-110 flex items-center gap-2 transition-all cursor-pointer shadow-[0_0_15px_rgba(0,229,255,0.4)]"
                           >
-                            Back to Details
-                          </Link>
-                        </div>
+                            <RotateCcw className="w-4 h-4" />
+                            Retry Server
+                          </button>
+                        )}
                     </div>
                 ) : isDirectVideo(activeStreamUrl) ? (
-                  /* Requirement 8: Preload player and video metadata */
+                  /* Native Video Player - Starts immediately without any custom loading overlay (Requirement 2 & 6) */
                   <video 
-                    key="zk-stream-video"
+                    key={activeStreamUrl}
                     src={activeStreamUrl}
                     controls
                     autoPlay
                     playsInline
                     preload="auto"
                     className="w-full h-full object-contain bg-black relative z-10"
-                    onLoadedMetadata={() => {
-                      isCurrentServerLoadedRef.current = true;
-                      setIsVideoLoading(false);
-                    }}
-                    onCanPlay={() => {
-                      isCurrentServerLoadedRef.current = true;
-                      setIsVideoLoading(false);
-                    }}
-                    onPlaying={() => {
-                      isCurrentServerLoadedRef.current = true;
-                      setIsVideoLoading(false);
-                    }}
-                    onError={(e) => {
-                      console.error('[Video Player] Direct video playback error:', e);
+                    onError={() => {
                       if (effectiveServer) {
-                        handleServerFailure(effectiveServer, 'Direct video error or 403/404');
+                        handleServerFailure(effectiveServer, 'Direct video playback error');
                       }
                     }}
                   />
                 ) : (
-                  /* Requirement 8 & 9: Persistent iframe with eager loading and 10s timeout */
+                  /* Embed Iframe Player - Starts immediately without any custom loading overlay (Requirement 2 & 6) */
                   <iframe 
                     ref={iframeRef}
-                    key="zk-stream-iframe"
+                    key={activeStreamUrl}
                     src={activeStreamUrl}
                     loading="eager"
                     className="w-full h-full border-0 absolute top-0 left-0 z-10"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
                     allowFullScreen
-                    onLoad={() => {
-                      isCurrentServerLoadedRef.current = true;
-                      setIsVideoLoading(false);
-                    }}
                     onError={() => {
                       if (effectiveServer) {
                         handleServerFailure(effectiveServer, 'Embed iframe load error');
