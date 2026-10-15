@@ -14,6 +14,13 @@
 import { supabase, executeSupabaseWithRetry, formatDbError, verifyRlsPolicies } from './supabase';
 import { getCachedData, setCachedData, clearCachedData, clearCachePrefix } from './cache';
 import { resolveImageUrl } from './imageUtils';
+import { auth } from './firebase';
+import { 
+  assertOwner, 
+  assertAuthenticated, 
+  sanitizeString, 
+  sanitizeUrl 
+} from './security';
 
 export { formatDbError, verifyRlsPolicies, resolveImageUrl };
 
@@ -256,6 +263,49 @@ export function isValidStreamUrl(input?: any): boolean {
     }
     return true;
   } catch {
+    return false;
+  }
+}
+
+const serverReachabilityCache = new Map<string, { ok: boolean; timestamp: number }>();
+
+/**
+ * Verifies if a streaming video or embed server URL is reachable before opening.
+ * Uses rapid timeout and cache to prevent lag (Requirement: Video - Verify server URL before opening).
+ */
+export async function probeServerReachable(url?: string | null, timeoutMs = 2500): Promise<boolean> {
+  if (!isValidStreamUrl(url)) return false;
+  const clean = String(url).trim();
+  
+  const cached = serverReachabilityCache.get(clean);
+  if (cached && (Date.now() - cached.timestamp < 60000)) {
+    return cached.ok;
+  }
+
+  if (typeof window === 'undefined') return true;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    // Cross-origin HEAD probe in no-cors mode
+    // Network failures (DNS resolution failed, server down, connection refused) will reject
+    await fetch(clean, {
+      method: 'HEAD',
+      mode: 'no-cors',
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    serverReachabilityCache.set(clean, { ok: true, timestamp: Date.now() });
+    return true;
+  } catch (err: any) {
+    // If aborted due to slow timeout, don't prematurely kill the server on slow mobile networks
+    if (err?.name === 'AbortError') {
+      serverReachabilityCache.set(clean, { ok: true, timestamp: Date.now() });
+      return true;
+    }
+    serverReachabilityCache.set(clean, { ok: false, timestamp: Date.now() });
     return false;
   }
 }
@@ -725,7 +775,68 @@ export async function getUnifiedCatalog(): Promise<UnifiedCatalog> {
 
     return catalog;
   } catch (err: any) {
-    console.error('[Supabase Real Error - getUnifiedCatalog exception]:', formatDbError(err));
+    console.warn('[Supabase getUnifiedCatalog join notice, switching to parallel query fallback]:', formatDbError(err));
+
+    try {
+      const [animeRes, seasonsRes, epsRes] = await Promise.allSettled([
+        executeSupabaseWithRetry(() => supabase.from('anime').select('*').order('created_at', { ascending: false })),
+        executeSupabaseWithRetry(() => supabase.from('seasons').select('*')),
+        executeSupabaseWithRetry(() => supabase.from('episodes').select('*').order('created_at', { ascending: false })),
+      ]);
+
+      const rawAnime = animeRes.status === 'fulfilled' && (animeRes.value as any)?.data ? (animeRes.value as any).data : [];
+      const rawSeasons = seasonsRes.status === 'fulfilled' && (seasonsRes.value as any)?.data ? (seasonsRes.value as any).data : [];
+      const rawEps = epsRes.status === 'fulfilled' && (epsRes.value as any)?.data ? (epsRes.value as any).data : [];
+
+      if (rawAnime.length > 0 || rawEps.length > 0) {
+        const allAnime: AnimeItem[] = rawAnime.map((a: any) => normalizeAnime(a));
+        const allSeasons: SeasonItem[] = rawSeasons.map((s: any) => ({
+          ...s,
+          id: String(s.id),
+          animeId: String(s.anime_id || s.animeId || ''),
+          seasonNumber: Number(s.season_number || s.seasonNumber || 1),
+          title: s.title || `Season ${s.season_number || 1}`,
+          bannerUrl: resolveImageUrl(s.banner_url || s.bannerUrl || ''),
+          banner_url: resolveImageUrl(s.banner_url || s.bannerUrl || ''),
+          posterUrl: resolveImageUrl(s.poster_url || s.posterUrl || ''),
+          poster_url: resolveImageUrl(s.poster_url || s.posterUrl || ''),
+          order: Number(s.order ?? (s.season_number || 1)),
+        }));
+        const allEpisodes: EpisodeItem[] = rawEps.map((e: any) => {
+          const matchedAnime = allAnime.find(a => a.id === (e.anime_id || e.animeId));
+          const matchedSeason = allSeasons.find(s => s.id === (e.season_id || e.seasonId));
+          return normalizeEpisodeDoc(e.id, e, matchedAnime, matchedSeason);
+        });
+
+        let feat = allAnime.filter(a => a.featured);
+        if (feat.length === 0 && allAnime.length > 0) feat = allAnime.slice(0, 6);
+
+        let trend = allAnime.filter(a => a.trending);
+        if (trend.length === 0 && allAnime.length > 0) {
+          trend = [...allAnime].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 10);
+        }
+
+        const newDrops = [...allEpisodes]
+          .filter(ep => ep.published !== false)
+          .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+          .slice(0, 40);
+
+        const catalog: UnifiedCatalog = {
+          allAnime,
+          featuredAnime: feat,
+          trendingAnime: trend,
+          newDrops,
+          allSeasons,
+          allEpisodes,
+        };
+
+        setCachedData(cacheKey, catalog);
+        return catalog;
+      }
+    } catch (fallbackErr: any) {
+      console.error('[Supabase parallel query fallback error]:', formatDbError(fallbackErr));
+    }
+
     if (cached) return cached;
     return {
       allAnime: [],
@@ -1559,8 +1670,9 @@ export async function getGenres(): Promise<string[]> {
 // WRITE OPERATIONS (SUPABASE ONLY WITH DATA SAFETY & ROLLBACK)
 // -------------------------------------------------------------
 
-// Insert new Anime into Supabase public.anime (Requirement 6)
+// Insert new Anime into Supabase public.anime (Requirement 2 & 6)
 export async function insertAnime(animeData: Partial<AnimeItem>): Promise<AnimeItem> {
+  assertOwner('add anime');
   const targetId = String(animeData.id || `anm_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
 
   const genres = Array.isArray(animeData.genres)
@@ -1569,30 +1681,30 @@ export async function insertAnime(animeData: Partial<AnimeItem>): Promise<AnimeI
     ? (animeData.genres as string).split(',').map((g: string) => g.trim()).filter(Boolean)
     : [];
 
-  const poster = animeData.posterUrl || animeData.poster_url || '';
-  const banner = animeData.bannerUrl || animeData.banner_url || poster;
-  const rating = String(animeData.rating || '9.5');
-  const releaseYear = String(animeData.releaseYear || animeData.release_year || '');
-  const status = animeData.status || 'Ongoing';
-  const language = animeData.language || 'Hindi Dub';
-  const dubbedBy = animeData.dubbedBy || animeData.dubbed_by || 'ZK Dubbing Studio';
+  const poster = sanitizeUrl(animeData.posterUrl || animeData.poster_url || '');
+  const banner = sanitizeUrl(animeData.bannerUrl || animeData.banner_url || poster);
+  const rating = sanitizeString(animeData.rating || '9.5', 10);
+  const releaseYear = sanitizeString(animeData.releaseYear || animeData.release_year || '', 20);
+  const status = sanitizeString(animeData.status || 'Ongoing', 50);
+  const language = sanitizeString(animeData.language || 'Hindi Dub', 50);
+  const dubbedBy = sanitizeString(animeData.dubbedBy || animeData.dubbed_by || 'ZK Dubbing Studio', 100);
   const featured = Boolean(animeData.featured);
   const trending = Boolean(animeData.trending);
 
   const type = (animeData.type === 'Movie' || animeData.contentType === 'Movie' || animeData.isMovie) ? 'Movie' : 'TV Series';
   const isMovie = type === 'Movie';
-  const duration = animeData.duration ? String(animeData.duration).trim() : (isMovie ? '1h 45m' : '');
-  const releaseDate = animeData.releaseDate ? String(animeData.releaseDate).trim() : (animeData.release_date || releaseYear);
+  const duration = sanitizeString(animeData.duration ? String(animeData.duration).trim() : (isMovie ? '1h 45m' : ''), 50);
+  const releaseDate = sanitizeString(animeData.releaseDate ? String(animeData.releaseDate).trim() : (animeData.release_date || releaseYear), 50);
 
-  const server1 = extractAbyssUrl(animeData.server1Url || animeData.server1_url || '');
-  const server2 = extractFileMoonUrl(animeData.server2Url || animeData.server2_url || '');
-  const server3 = extractVDOHideUrl(animeData.server3Url || animeData.server3_url || '');
+  const server1 = sanitizeUrl(extractAbyssUrl(animeData.server1Url || animeData.server1_url || ''));
+  const server2 = sanitizeUrl(extractFileMoonUrl(animeData.server2Url || animeData.server2_url || ''));
+  const server3 = sanitizeUrl(extractVDOHideUrl(animeData.server3Url || animeData.server3_url || ''));
 
   const payload: any = {
     id: targetId,
-    title: (animeData.title || 'Untitled Anime').trim(),
-    description: animeData.description || animeData.synopsis || '',
-    synopsis: animeData.synopsis || animeData.description || '',
+    title: sanitizeString(animeData.title || 'Untitled Anime', 300),
+    description: sanitizeString(animeData.description || animeData.synopsis || '', 10000),
+    synopsis: sanitizeString(animeData.synopsis || animeData.description || '', 10000),
     poster_url: poster,
     banner_url: banner,
     genres,
@@ -1664,8 +1776,9 @@ export async function insertAnime(animeData: Partial<AnimeItem>): Promise<AnimeI
   return normalizeAnime(data || payload, targetId);
 }
 
-// Update existing Anime in Supabase public.anime (Requirement 6)
+// Update existing Anime in Supabase public.anime (Requirement 2 & 6)
 export async function updateAnime(id: string, animeData: Partial<AnimeItem>): Promise<AnimeItem> {
+  assertOwner('edit anime');
   const targetId = String(id).trim();
   if (!targetId) throw new Error('Cannot update anime: ID is required');
 
@@ -1764,8 +1877,9 @@ export async function saveAnimeBoth(animeData: any, id?: string): Promise<string
 }
 export const saveAnime = saveAnimeBoth;
 
-// Delete Anime from Supabase (Requirement 5)
+// Delete Anime from Supabase (Requirement 2 & 5)
 export async function deleteAnimeBoth(id: string): Promise<void> {
+  assertOwner('delete anime');
   const cleanId = String(id).trim();
 
   // 1. Fetch current data for disaster recovery snapshot
@@ -1809,8 +1923,9 @@ export async function deleteAnimeBoth(id: string): Promise<void> {
 }
 export const deleteAnime = deleteAnimeBoth;
 
-// Save Season to Supabase (Requirement 5)
+// Save Season to Supabase (Requirement 2 & 5)
 export async function saveSeasonBoth(seasonData: any, id?: string): Promise<string> {
+  assertOwner('add or edit seasons');
   const targetId = String(id || seasonData.id || `sea_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
   const targetAnimeId = String(seasonData.animeId || seasonData.anime_id);
   const sNum = Number(seasonData.seasonNumber || seasonData.season_number) || 1;
@@ -1838,12 +1953,12 @@ export async function saveSeasonBoth(seasonData: any, id?: string): Promise<stri
     id: targetId,
     anime_id: targetAnimeId,
     season_number: sNum,
-    title: seasonData.title || `Season ${sNum}`,
-    description: seasonData.description || '',
-    banner_url: seasonData.bannerUrl || seasonData.banner_url || '',
-    poster_url: seasonData.posterUrl || seasonData.poster_url || '',
+    title: sanitizeString(seasonData.title || `Season ${sNum}`, 200),
+    description: sanitizeString(seasonData.description || '', 5000),
+    banner_url: sanitizeUrl(seasonData.bannerUrl || seasonData.banner_url || ''),
+    poster_url: sanitizeUrl(seasonData.posterUrl || seasonData.poster_url || ''),
     order: Number(seasonData.order ?? sNum),
-    status: seasonData.status || 'Published',
+    status: sanitizeString(seasonData.status || 'Published', 50),
   };
 
   if (!id && !previousState) {
@@ -1874,8 +1989,9 @@ export async function saveSeasonBoth(seasonData: any, id?: string): Promise<stri
 }
 export const saveSeason = saveSeasonBoth;
 
-// Delete Season from Supabase (Requirement 5)
+// Delete Season from Supabase (Requirement 2 & 5)
 export async function deleteSeasonBoth(id: string): Promise<void> {
+  assertOwner('delete seasons');
   const cleanId = String(id).trim();
 
   try {
@@ -2048,8 +2164,9 @@ export async function ensureSeasonExists(
   };
 }
 
-// Save Episode to Supabase (Requirement 5, 7)
+// Save Episode to Supabase (Requirement 2, 5, 7)
 export async function saveEpisodeBoth(epData: any, id?: string): Promise<string> {
+  assertOwner('add or edit episodes');
   const targetId = String(id || epData.id || `ep_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
   const targetAnimeId = String(epData.animeId || epData.anime_id);
   const epNum = Number(epData.episodeNumber || epData.episode_number) || 1;
@@ -2112,17 +2229,17 @@ export async function saveEpisodeBoth(epData: any, id?: string): Promise<string>
     season_id: finalSeasonId,
     season_number: validatedSeasonNum || 1,
     episode_number: epNum,
-    episode_title: epData.title || epData.episode_title || `Episode ${epNum}`,
-    description: epData.description || '',
-    thumbnail_url: epData.thumbnailUrl || epData.thumbnail_url || '',
-    duration: epData.duration || '24m',
-    release_date: epData.releaseDate || epData.release_date || '',
-    server1_url: server1,
-    server2_url: server2,
-    server3_url: server3,
-    abyss_url: server1,
-    filemoon_url: server2,
-    vdohide_url: server3,
+    episode_title: sanitizeString(epData.title || epData.episode_title || `Episode ${epNum}`, 250),
+    description: sanitizeString(epData.description || '', 5000),
+    thumbnail_url: sanitizeUrl(epData.thumbnailUrl || epData.thumbnail_url || ''),
+    duration: sanitizeString(epData.duration || '24m', 50),
+    release_date: sanitizeString(epData.releaseDate || epData.release_date || '', 50),
+    server1_url: sanitizeUrl(server1),
+    server2_url: sanitizeUrl(server2),
+    server3_url: sanitizeUrl(server3),
+    abyss_url: sanitizeUrl(server1),
+    filemoon_url: sanitizeUrl(server2),
+    vdohide_url: sanitizeUrl(server3),
     published: epData.published !== false,
     updated_at: new Date().toISOString(),
   };
@@ -2171,8 +2288,9 @@ export async function saveEpisodeBoth(epData: any, id?: string): Promise<string>
 }
 export const saveEpisode = saveEpisodeBoth;
 
-// Delete Episode from Supabase (Requirement 5)
+// Delete Episode from Supabase (Requirement 2 & 5)
 export async function deleteEpisodeBoth(id: string): Promise<void> {
+  assertOwner('delete episodes');
   const cleanId = String(id).trim();
 
   // 1. Snapshot for recovery
@@ -2248,18 +2366,19 @@ export async function saveUserProgress(progress: {
   currentTime?: number;
   duration?: number;
 }): Promise<void> {
-  if (!progress.userId || !progress.episodeId) return;
+  const currentUid = auth.currentUser?.uid;
+  if (!currentUid || currentUid !== progress.userId || !progress.episodeId) return;
   try {
     await supabase.from('user_progress').upsert({
       user_id: progress.userId,
-      anime_id: progress.animeId,
-      anime_title: progress.animeTitle || '',
-      episode_id: progress.episodeId,
-      episode_title: progress.episodeTitle || '',
-      season_id: progress.seasonId || 's1',
+      anime_id: sanitizeString(progress.animeId, 100),
+      anime_title: sanitizeString(progress.animeTitle || '', 300),
+      episode_id: sanitizeString(progress.episodeId, 100),
+      episode_title: sanitizeString(progress.episodeTitle || '', 250),
+      season_id: sanitizeString(progress.seasonId || 's1', 100),
       season_number: progress.seasonNumber || 1,
       episode_number: progress.episodeNumber || 1,
-      poster_url: progress.posterUrl || '',
+      poster_url: sanitizeUrl(progress.posterUrl || ''),
       current_time: progress.currentTime || 0,
       duration: progress.duration || 1440,
       updated_at: new Date().toISOString(),
@@ -2270,7 +2389,8 @@ export async function saveUserProgress(progress: {
 }
 
 export async function deleteUserProgress(userId: string, episodeId: string): Promise<void> {
-  if (!userId || !episodeId) return;
+  const currentUid = auth.currentUser?.uid;
+  if (!currentUid || currentUid !== userId || !episodeId) return;
   try {
     await supabase.from('user_progress').delete().match({ user_id: userId, episode_id: episodeId });
   } catch {
@@ -2321,13 +2441,14 @@ export async function addFavorite(
   userId: string,
   anime: { id: string; title: string; posterUrl?: string }
 ): Promise<void> {
-  if (!userId || !anime.id) return;
+  const currentUid = auth.currentUser?.uid;
+  if (!currentUid || currentUid !== userId || !anime.id) return;
   try {
     await supabase.from('favorites').upsert({
       user_id: userId,
-      anime_id: anime.id,
-      anime_title: anime.title,
-      poster_url: anime.posterUrl || '',
+      anime_id: sanitizeString(anime.id, 100),
+      anime_title: sanitizeString(anime.title, 300),
+      poster_url: sanitizeUrl(anime.posterUrl || ''),
       created_at: new Date().toISOString(),
     });
   } catch {
@@ -2336,7 +2457,8 @@ export async function addFavorite(
 }
 
 export async function removeFavorite(userId: string, animeId: string): Promise<void> {
-  if (!userId || !animeId) return;
+  const currentUid = auth.currentUser?.uid;
+  if (!currentUid || currentUid !== userId || !animeId) return;
   try {
     await supabase.from('favorites').delete().match({ user_id: userId, anime_id: animeId });
   } catch {
@@ -2379,14 +2501,15 @@ export async function addToWatchlist(
   userId: string,
   anime: { id: string; title: string; posterUrl?: string; status?: string }
 ): Promise<void> {
-  if (!userId || !anime.id) return;
+  const currentUid = auth.currentUser?.uid;
+  if (!currentUid || currentUid !== userId || !anime.id) return;
   try {
     await supabase.from('watchlist').upsert({
       user_id: userId,
-      anime_id: anime.id,
-      anime_title: anime.title,
-      poster_url: anime.posterUrl || '',
-      status: anime.status || 'Plan to Watch',
+      anime_id: sanitizeString(anime.id, 100),
+      anime_title: sanitizeString(anime.title, 300),
+      poster_url: sanitizeUrl(anime.posterUrl || ''),
+      status: sanitizeString(anime.status || 'Plan to Watch', 50),
       created_at: new Date().toISOString(),
     });
   } catch {
@@ -2395,7 +2518,8 @@ export async function addToWatchlist(
 }
 
 export async function removeFromWatchlist(userId: string, animeId: string): Promise<void> {
-  if (!userId || !animeId) return;
+  const currentUid = auth.currentUser?.uid;
+  if (!currentUid || currentUid !== userId || !animeId) return;
   try {
     await supabase.from('watchlist').delete().match({ user_id: userId, anime_id: animeId });
   } catch {

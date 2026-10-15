@@ -4,6 +4,14 @@ import path from 'path';
 import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
+  const targetSupabaseUrl = 
+    process.env.VITE_SUPABASE_URL && !process.env.VITE_SUPABASE_URL.includes('fmxtiykddxwzewzckihv')
+      ? process.env.VITE_SUPABASE_URL
+      : 'https://rwioavitlgzyrbgivwzi.supabase.co';
+
+  const targetAnonKey = 
+    process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_kecwr9BW3V2UnM4TpruFfQ_S6C7Qsys';
+
   return {
     plugins: [
       react(),
@@ -15,16 +23,13 @@ export default defineConfig(() => {
       },
     },
     define: {
-      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(
-        process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_URL.includes('rwioavitlgzyrbgivwzi')
-          ? process.env.VITE_SUPABASE_URL
-          : 'https://rwioavitlgzyrbgivwzi.supabase.co'
-      ),
-      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(
-        process.env.VITE_SUPABASE_ANON_KEY && !process.env.VITE_SUPABASE_ANON_KEY.includes('placeholder')
-          ? process.env.VITE_SUPABASE_ANON_KEY
-          : 'sb_publishable_kecwr9BW3V2UnM4TpruFfQ_S6C7Qsys'
-      ),
+      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(targetSupabaseUrl),
+      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(targetAnonKey),
+    },
+    esbuild: {
+      // Disable debug logs and debugger statements in production build (Requirement 6)
+      drop: process.env.NODE_ENV === 'production' ? ['debugger'] : [],
+      pure: process.env.NODE_ENV === 'production' ? ['console.log', 'console.debug', 'console.info'] : [],
     },
     build: {
       rollupOptions: {
@@ -47,12 +52,20 @@ export default defineConfig(() => {
       host: '0.0.0.0',
       proxy: {
         '/api/supabase-proxy': {
-          target: 'https://rwioavitlgzyrbgivwzi.supabase.co',
+          target: targetSupabaseUrl,
           changeOrigin: true,
           secure: true,
-          rewrite: (path) => path.replace(/^\/api\/supabase-proxy/, ''),
+          rewrite: (p) => p.replace(/^\/api\/supabase-proxy/, ''),
           headers: {
-            apikey: 'sb_publishable_kecwr9BW3V2UnM4TpruFfQ_S6C7Qsys',
+            apikey: targetAnonKey,
+          },
+        },
+        '/rest/v1': {
+          target: targetSupabaseUrl,
+          changeOrigin: true,
+          secure: true,
+          headers: {
+            apikey: targetAnonKey,
           },
         },
       },

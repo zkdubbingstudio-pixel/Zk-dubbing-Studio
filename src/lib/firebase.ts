@@ -47,8 +47,19 @@ export function purgeOversizedCache(): void {
 
 purgeOversizedCache();
 
-// 1. Initialize Firebase App strictly once using the exact firebaseConfig (Requirement 8 & 9)
-export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+// Read Firebase configuration from environment variables (Requirement 5)
+export const resolvedFirebaseConfig = {
+  apiKey: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_API_KEY) || firebaseConfig.apiKey || '',
+  authDomain: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_AUTH_DOMAIN) || firebaseConfig.authDomain || '',
+  projectId: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_PROJECT_ID) || firebaseConfig.projectId || '',
+  storageBucket: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_STORAGE_BUCKET) || firebaseConfig.storageBucket || '',
+  messagingSenderId: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_MESSAGING_SENDER_ID) || firebaseConfig.messagingSenderId || '',
+  appId: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_APP_ID) || firebaseConfig.appId || '',
+  firestoreDatabaseId: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_DATABASE_ID) || (firebaseConfig as any).firestoreDatabaseId || '',
+};
+
+// 1. Initialize Firebase App strictly once using the resolved config (Requirement 5, 8 & 9)
+export const app = getApps().length === 0 ? initializeApp(resolvedFirebaseConfig) : getApp();
 
 // 2. Initialize Firebase Auth strictly once (Requirement 9)
 export const auth = getAuth(app);

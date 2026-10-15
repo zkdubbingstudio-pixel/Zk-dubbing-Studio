@@ -1,4 +1,4 @@
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, Play, SkipForward, SkipBack, Server, RotateCcw, AlertCircle } from 'lucide-react';
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
@@ -9,11 +9,13 @@ import {
   getEpisodesByAnimeId, 
   resolveEpisodeServers, 
   isValidStreamUrl,
+  probeServerReachable,
   saveUserProgress, 
   getActiveEpisodesTable, 
   getActiveAnimeTable 
 } from '../lib/dataService';
 import { supabase } from '../lib/supabase';
+import { getCachedData } from '../lib/cache';
 import { useAuthStore } from '../store/authStore';
 import SmartImage from '../components/SmartImage';
 
@@ -44,24 +46,28 @@ function cleanEmbedUrl(input?: string): string {
 
 export default function WatchPage() {
   const { id, animeId: routeAnimeId, seasonId: routeSeasonId } = useParams(); // Episode ID or animeId/seasonId/id
-  
-  const [episode, setEpisode] = useState<any>(null);
-  const [anime, setAnime] = useState<any>(null);
-  const [seasons, setSeasons] = useState<any[]>([]);
-  const [seasonEpisodes, setSeasonEpisodes] = useState<any[]>([]);
-  
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedServer, setSelectedServer] = useState<'server1' | 'server2' | 'server3'>('server1');
-  const [deadServers, setDeadServers] = useState<Set<'server1' | 'server2' | 'server3'>>(new Set());
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-
+  const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuthStore();
 
   const paramId = (id && id !== 'undefined' && id !== 'null') ? id : undefined;
   const paramAnimeId = (routeAnimeId && routeAnimeId !== 'undefined' && routeAnimeId !== 'null') ? routeAnimeId : undefined;
   const paramSeasonId = (routeSeasonId && routeSeasonId !== 'undefined' && routeSeasonId !== 'null') ? routeSeasonId : undefined;
+
+  // Instant pre-population from route state or cache so video begins playing immediately
+  const initialEp = (location.state as any)?.episode || (paramId ? getCachedData<any>(`episode_${paramId}`) : null);
+  const initialAnime = (location.state as any)?.anime || (paramAnimeId ? getCachedData<any>(`anime_${paramAnimeId}`) : null);
+
+  const [episode, setEpisode] = useState<any>(initialEp);
+  const [anime, setAnime] = useState<any>(initialAnime);
+  const [seasons, setSeasons] = useState<any[]>([]);
+  const [seasonEpisodes, setSeasonEpisodes] = useState<any[]>(initialEp ? [initialEp] : []);
+  
+  const [loading, setLoading] = useState(!initialEp);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedServer, setSelectedServer] = useState<'server1' | 'server2' | 'server3'>('server1');
+  const [deadServers, setDeadServers] = useState<Set<'server1' | 'server2' | 'server3'>>(new Set());
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Analytics Tracking (Episode views)
   useEffect(() => {
@@ -431,6 +437,48 @@ export default function WatchPage() {
     });
   }, [server1Url, server2Url, server3Url]);
 
+  // Active verification: Verify server URL before opening and auto-switch from Server 1 to Server 2 (Requirement: VIDEO)
+  useEffect(() => {
+    let cancelled = false;
+    if (!episode) return;
+
+    const verifyServerUrls = async () => {
+      // 1. If server1 exists and hasn't been declared dead, verify reachability
+      if (server1Url && !deadServers.has('server1')) {
+        const isS1Ok = await probeServerReachable(server1Url);
+        if (cancelled) return;
+        if (!isS1Ok) {
+          console.warn('[Video Player] Server 1 unreachable. Automatically switching to Server 2.');
+          handleServerFailure('server1', 'Failed URL reachability check');
+          return;
+        }
+      }
+
+      // 2. Check server2 and server3 in background so only working servers are displayed
+      if (server2Url && !deadServers.has('server2')) {
+        probeServerReachable(server2Url).then((ok) => {
+          if (!ok && !cancelled) {
+            handleServerFailure('server2', 'Failed URL reachability check');
+          }
+        });
+      }
+
+      if (server3Url && !deadServers.has('server3')) {
+        probeServerReachable(server3Url).then((ok) => {
+          if (!ok && !cancelled) {
+            handleServerFailure('server3', 'Failed URL reachability check');
+          }
+        });
+      }
+    };
+
+    verifyServerUrls();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [episode?.id, server1Url, server2Url, server3Url, handleServerFailure]);
+
   const handleSelectServer = (server: 'server1' | 'server2' | 'server3') => {
     if (effectiveServer !== server && aliveServers.includes(server)) {
       setSelectedServer(server);
@@ -562,8 +610,9 @@ export default function WatchPage() {
                     src={activeStreamUrl}
                     loading="eager"
                     className="w-full h-full border-0 absolute top-0 left-0 z-10"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen" 
                     allowFullScreen
+                    referrerPolicy="no-referrer"
                     onError={() => {
                       if (effectiveServer) {
                         handleServerFailure(effectiveServer, 'Embed iframe load error');

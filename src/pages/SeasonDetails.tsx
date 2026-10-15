@@ -144,6 +144,7 @@ export default function SeasonDetails() {
               <Link 
                 key={ep.id} 
                 to={`/watch/${id}/${seasonId || ep.seasonId || 's1'}/${ep.id}`}
+                state={{ episode: ep, anime }}
                 className="group flex flex-col sm:flex-row gap-4 p-3 pr-4 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/10 transition-all items-start sm:items-center bg-bg-surface/30"
               >
                 {/* Thumbnail container (Requirements 2, 6, 9) */}

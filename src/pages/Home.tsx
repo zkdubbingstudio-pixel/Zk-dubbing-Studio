@@ -46,18 +46,12 @@ export default function Home() {
     setRetrying(true);
 
     try {
-      // Pre-flight connection verification to new Supabase project (Requirement 5)
-      const health = await checkSupabaseConnection();
-      if (!health.ok) {
-        console.error('[Supabase Failing Request]: Pre-flight connection verification failed:', {
-          endpoint: supabaseUrl,
-          message: health.message,
-        });
-        setError(health.message);
-        setLoading(false);
-        setRetrying(false);
-        return;
-      }
+      // Non-blocking background health check so slow preflights don't block the UI
+      checkSupabaseConnection().then((health) => {
+        if (!health.ok) {
+          console.warn('[Supabase Pre-flight Notice]:', health.message);
+        }
+      }).catch(() => {});
 
       // Requirement 5: Load anime, seasons and episodes using a single optimized query
       // Requirement 6: Cache API responses for 5 minutes

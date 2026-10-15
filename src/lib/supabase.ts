@@ -1,9 +1,8 @@
 /// <reference types="vite/client" />
 import { createClient } from '@supabase/supabase-js';
 
-// 1. Strict Configuration for the NEW Supabase Project (Requirement 1, 4, 7)
+// 1. Strict Configuration for the Supabase Project (Requirement 4 & 5)
 export const NEW_SUPABASE_PROJECT_URL = 'https://rwioavitlgzyrbgivwzi.supabase.co';
-export const SUPABASE_DEFAULT_ANON_KEY = 'sb_publishable_kecwr9BW3V2UnM4TpruFfQ_S6C7Qsys';
 
 const envUrl = 
   (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SUPABASE_URL) || 
@@ -15,19 +14,12 @@ const envKey =
   (typeof process !== 'undefined' && process.env && process.env.VITE_SUPABASE_ANON_KEY) || 
   '';
 
-// Discard placeholders, strictly enforce the new project URL (Requirement 1 & 7)
-export const supabaseUrl = (
-  envUrl && !envUrl.includes('placeholder') && envUrl.includes('rwioavitlgzyrbgivwzi')
-    ? envUrl
-    : NEW_SUPABASE_PROJECT_URL
-).trim().replace(/\/+$/, '');
+export const SUPABASE_DEFAULT_ANON_KEY = 'sb_publishable_kecwr9BW3V2UnM4TpruFfQ_S6C7Qsys';
 
-// Load publishable key for the new project with guaranteed valid default
-export const supabaseKey = (
-  envKey && !envKey.includes('placeholder')
-    ? envKey
-    : SUPABASE_DEFAULT_ANON_KEY
-).trim();
+const isInvalidOldHost = (u?: string) => !u || u.includes('fmxtiykddxwzewzckihv');
+
+export const supabaseUrl = (!isInvalidOldHost(envUrl) ? envUrl : NEW_SUPABASE_PROJECT_URL).trim().replace(/\/+$/, '');
+export const supabaseKey = (envKey || SUPABASE_DEFAULT_ANON_KEY).trim();
 
 // Per-attempt timeout: 12 seconds with retry protection
 export const SUPABASE_TIMEOUT_MS = 12000;
@@ -148,10 +140,9 @@ async function customFetchWithTimeout(input: RequestInfo | URL, init?: RequestIn
 
 export const supabase = createClient(supabaseUrl, supabaseKey || 'pending-key', {
   auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-    storage: typeof window !== 'undefined' ? window.localStorage : undefined,
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
   },
   global: {
     fetch: customFetchWithTimeout,

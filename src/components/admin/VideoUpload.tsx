@@ -3,6 +3,8 @@ import { Upload, X, Check, AlertCircle } from 'lucide-react';
 import { S3Client } from '@aws-sdk/client-s3';
 import { Upload as S3Upload } from '@aws-sdk/lib-storage';
 
+import { validateVideoUpload } from '../../lib/security';
+
 interface VideoUploadProps {
   label: string;
   onUploadSuccess: (urls: { url480p: string, url720p: string, url1080p: string }) => void;
@@ -21,17 +23,11 @@ export default function VideoUpload({ label, onUploadSuccess, animeName, seasonN
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate size (10GB max)
-    const MAX_SIZE = 10 * 1024 * 1024 * 1024;
-    if (file.size > MAX_SIZE) {
-      setError('File exceeds maximum size of 10GB');
-      return;
-    }
-
-    // Validate format
-    const validTypes = ['video/mp4', 'video/webm', 'video/x-matroska', 'video/mkv'];
-    if (!validTypes.includes(file.type) && !file.name.endsWith('.mkv')) {
-      setError('Invalid file format. Please upload MP4, WEBM, or MKV.');
+    // Strict validation: Owner permission, MIME type, extension, size limit (Requirement 2, 13, 14)
+    const validation = validateVideoUpload(file);
+    if (!validation.valid) {
+      setError(validation.error || 'Invalid video file');
+      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 

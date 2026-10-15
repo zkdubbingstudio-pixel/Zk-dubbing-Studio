@@ -16,13 +16,16 @@ service cloud.firestore {
       allow read: if true;
     }
     match /anime/{animeId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isSuperAdmin();
     }
     match /seasons/{seasonId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isSuperAdmin();
     }
     match /episodes/{episodeId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isSuperAdmin();
     }
     match /favorites/{favoriteId} {
       allow read, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;

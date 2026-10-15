@@ -12,9 +12,12 @@ interface ImageUploadProps {
   className?: string;
 }
 
+import { validateImageUpload, sanitizeUrl } from '../../lib/security';
+
 export default function ImageUpload({ label, value, onChange, folder, className = "h-40" }: ImageUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [mode, setMode] = useState<'upload' | 'url'>('upload');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -42,9 +45,11 @@ export default function ImageUpload({ label, value, onChange, folder, className 
   };
 
   const processFile = async (file: File) => {
-    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!validTypes.includes(file.type)) {
-      alert('Invalid file type. Only JPG, PNG, and WEBP are allowed.');
+    setErrorMsg(null);
+    const validation = validateImageUpload(file);
+    if (!validation.valid) {
+      setErrorMsg(validation.error || 'Invalid file');
+      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
@@ -52,8 +57,8 @@ export default function ImageUpload({ label, value, onChange, folder, className 
 
     try {
       const options = {
-        maxSizeMB: 0.4, // 400KB * 1.33 (Base64) = ~530KB, well under Firestore 1MB limit
-        maxWidthOrHeight: 1280,
+        maxSizeMB: 0.8,
+        maxWidthOrHeight: 1600,
         useWebWorker: true,
       };
       const compressedFile = await imageCompression(file, options);
@@ -67,9 +72,8 @@ export default function ImageUpload({ label, value, onChange, folder, className 
         if (fileInputRef.current) fileInputRef.current.value = '';
       };
       
-    } catch (error) {
-      console.error(error);
-      alert('Error compressing image. Try a smaller file or use URL mode.');
+    } catch (error: any) {
+      setErrorMsg(error?.message || 'Error processing image. Please try a different image.');
       setUploading(false);
     }
   };
@@ -94,11 +98,17 @@ export default function ImageUpload({ label, value, onChange, folder, className 
         </button>
       </div>
       
+      {errorMsg && (
+        <div className="mb-2 p-2 bg-red-500/20 border border-red-500/30 rounded-lg text-xs text-red-400">
+          {errorMsg}
+        </div>
+      )}
+
       {mode === 'url' ? (
         <input 
           type="url" 
           value={value} 
-          onChange={e => onChange(e.target.value)} 
+          onChange={e => onChange(sanitizeUrl(e.target.value))} 
           placeholder="https://example.com/image.jpg"
           className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand"
         />

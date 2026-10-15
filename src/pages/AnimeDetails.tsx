@@ -394,10 +394,10 @@ export default function AnimeDetails() {
                         const targetEp = latestEpisode || (allEpisodes.length > 0 ? allEpisodes[0] : null);
                         const epId = targetEp ? targetEp.id : (anime.id || 'movie-ep');
                         const sId = targetEp ? (targetEp.seasonId || targetEp.season_id || 's1') : 's1';
-                        navigate(`/watch/${anime.id}/${sId}/${epId}`);
+                        navigate(`/watch/${anime.id}/${sId}/${epId}`, { state: { episode: targetEp, anime } });
                       } else if (latestEpisode) {
                         const sId = latestEpisode.seasonId || latestEpisode.season_id || 's1';
-                        navigate(`/watch/${anime.id}/${sId}/${latestEpisode.id}`);
+                        navigate(`/watch/${anime.id}/${sId}/${latestEpisode.id}`, { state: { episode: latestEpisode, anime } });
                       }
                     }}
                     disabled={!isMovie && !latestEpisode}
@@ -564,6 +564,7 @@ export default function AnimeDetails() {
                     <Link
                       key={ep.id}
                       to={`/watch/${anime.id}/${epSeasonId || selectedSeason || 's1'}/${ep.id}`}
+                      state={{ episode: ep, anime }}
                       className="group flex flex-col glass-cyber-card rounded-2xl overflow-hidden border border-white/10 hover:border-[#00e5ff]/70 transition-all duration-300 hover:-translate-y-1.5 hover:shadow-[0_12px_30px_rgba(0,229,255,0.2)]"
                     >
                       <div className="relative w-full aspect-video bg-[#0a0e17] overflow-hidden">
