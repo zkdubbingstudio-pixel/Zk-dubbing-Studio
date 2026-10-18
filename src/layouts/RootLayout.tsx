@@ -80,9 +80,9 @@ export default function RootLayout() {
       {/* Floating Cyber Particles Background */}
       <CyberParticles />
 
-      {/* Cyber Ambient Background Glows */}
-      <div className="fixed top-0 left-1/4 w-96 h-96 bg-[#00e5ff]/5 rounded-full blur-[120px] pointer-events-none z-0" />
-      <div className="fixed bottom-0 right-1/4 w-96 h-96 bg-[#0077b6]/5 rounded-full blur-[140px] pointer-events-none z-0" />
+      {/* Cyber Ambient Background Glows (Desktop only to prevent Mali-G57 GPU composition throttling) */}
+      <div className="hidden sm:block fixed top-0 left-1/4 w-96 h-96 bg-[#00e5ff]/5 rounded-full blur-[120px] pointer-events-none z-0" />
+      <div className="hidden sm:block fixed bottom-0 right-1/4 w-96 h-96 bg-[#0077b6]/5 rounded-full blur-[140px] pointer-events-none z-0" />
 
       {/* Global Auth Success Toast Notification */}
       {authSuccessMessage && (
@@ -114,7 +114,7 @@ export default function RootLayout() {
       <header
         className={`fixed top-0 w-full z-50 transition-all duration-300 ${
           isScrolled
-            ? 'bg-[#05070b]/85 backdrop-blur-2xl border-b border-white/10 shadow-[0_10px_30px_rgba(0,0,0,0.8)]'
+            ? 'bg-[#05070b]/95 sm:backdrop-blur-2xl sm:bg-[#05070b]/85 border-b border-white/10 shadow-[0_4px_16px_rgba(0,0,0,0.5)] sm:shadow-[0_10px_30px_rgba(0,0,0,0.8)]'
             : 'bg-gradient-to-b from-[#05070b]/90 via-[#05070b]/40 to-transparent'
         }`}
       >

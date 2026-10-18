@@ -5,7 +5,7 @@ import { useAuthStore } from '../store/authStore';
 import { getUserProgress, deleteUserProgress } from '../lib/dataService';
 import SmartImage from './SmartImage';
 
-export default function ContinueWatchingRow() {
+function ContinueWatchingRow() {
   const { user, firebaseUser } = useAuthStore();
   const [history, setHistory] = useState<any[]>([]);
   const effectiveUserId = user?.uid || firebaseUser?.uid || null;
@@ -153,3 +153,5 @@ export default function ContinueWatchingRow() {
     </section>
   );
 }
+
+export default React.memo(ContinueWatchingRow);

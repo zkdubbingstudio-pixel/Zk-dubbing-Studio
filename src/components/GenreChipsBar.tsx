@@ -7,7 +7,7 @@ interface GenreChipsBarProps {
   onSelectGenre: (genre: string) => void;
 }
 
-export default function GenreChipsBar({ genres, selectedGenre, onSelectGenre }: GenreChipsBarProps) {
+function GenreChipsBar({ genres, selectedGenre, onSelectGenre }: GenreChipsBarProps) {
   return (
     <div className="w-full relative py-2">
       <div className="flex items-center gap-2.5 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
@@ -36,3 +36,11 @@ export default function GenreChipsBar({ genres, selectedGenre, onSelectGenre }: 
     </div>
   );
 }
+
+export default React.memo(GenreChipsBar, (prev, next) => {
+  return (
+    prev.selectedGenre === next.selectedGenre &&
+    prev.genres.length === next.genres.length &&
+    prev.genres.every((g, i) => g === next.genres[i])
+  );
+});

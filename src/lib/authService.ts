@@ -29,9 +29,17 @@ export function isOwner(email?: string | null): boolean {
   return isAuthorizedAdmin(email);
 }
 
+const userProfileCache = new Map<string, { user: User; timestamp: number }>();
+const PROFILE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+export function invalidateUserProfileCache(uid?: string | null): void {
+  if (uid) userProfileCache.delete(uid);
+  else userProfileCache.clear();
+}
+
 /**
  * Loads user profile from Supabase database (with resilient fallback to Firestore).
- * Does NOT write to or read from localStorage or sessionStorage.
+ * Uses in-memory caching to eliminate redundant database and Firebase queries.
  * Never throws — always returns a valid User object.
  */
 export async function loadUserProfileFromSupabase(
@@ -39,6 +47,26 @@ export async function loadUserProfileFromSupabase(
   email?: string | null,
   fallbackName?: string | null
 ): Promise<User> {
+  if (!uid) {
+    return {
+      uid: 'anon',
+      id: 'anon',
+      email: email || '',
+      name: fallbackName || 'Anime Fan',
+      displayName: fallbackName || 'Anime Fan',
+      photoURL: '',
+      role: 'user',
+      isBanned: false,
+      createdAt: Date.now(),
+    };
+  }
+
+  // Check in-memory cache first to eliminate duplicate network calls
+  const cached = userProfileCache.get(uid);
+  if (cached && (Date.now() - cached.timestamp < PROFILE_CACHE_TTL)) {
+    return cached.user;
+  }
+
   const cleanEmail = (email || '').trim().toLowerCase();
   const isOwnerUser = isAuthorizedAdmin(cleanEmail);
   const role: 'owner' | 'user' = isOwnerUser ? 'owner' : 'user';
@@ -146,6 +174,7 @@ export async function loadUserProfileFromSupabase(
     } catch {}
   }
 
+  userProfileCache.set(uid, { user: userRecord, timestamp: Date.now() });
   return userRecord;
 }
 
@@ -402,6 +431,7 @@ export async function sendFirebasePasswordReset(email: string): Promise<void> {
  * - Does NOT use custom storage keys
  */
 export async function signOutUser(): Promise<void> {
+  invalidateUserProfileCache();
   if (auth) {
     try {
       await signOut(auth);

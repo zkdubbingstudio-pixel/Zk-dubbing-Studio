@@ -3,6 +3,7 @@ import {
   resolveImageUrl, 
   isValidImageUrl, 
   getAlternativeImageCandidates,
+  getOptimizedWebPUrl,
   markImageVerified,
   isImageVerified,
   DEFAULT_POSTER_FALLBACK,
@@ -28,7 +29,7 @@ export interface SmartImageProps {
 // 1x1 transparent SVG data URI to avoid broken image icons while awaiting viewport intersection
 const TRANSPARENT_PLACEHOLDER = 'data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%221%22%20height%3D%221%22%20viewBox%3D%220%200%201%201%22%3E%3C%2Fsvg%3E';
 
-const SmartImage = React.memo(function SmartImage({
+const SmartImage = function SmartImage({
   src,
   alt = 'Anime Artwork',
   type = 'poster',
@@ -61,10 +62,19 @@ const SmartImage = React.memo(function SmartImage({
     return false;
   });
 
-  const [currentSrc, setCurrentSrc] = useState<string>(
-    isValid && initialResolved ? initialResolved : (resolveImageUrl(fallbackUrl) || defaultFallback)
-  );
+  // Calculate compressed WebP URL where possible with raw fallback
+  const getInitialTargetSrc = () => {
+    if (!isValid || !initialResolved) {
+      return resolveImageUrl(fallbackUrl) || defaultFallback;
+    }
+    // Attempt WebP conversion for 75%+ bandwidth reduction
+    const webp = getOptimizedWebPUrl(initialResolved, type);
+    return webp || initialResolved;
+  };
+
+  const [currentSrc, setCurrentSrc] = useState<string>(getInitialTargetSrc);
   const [retryCount, setRetryCount] = useState<number>(0);
+  const [triedOriginalUrl, setTriedOriginalUrl] = useState<boolean>(false);
   const [triedFallbackUrl, setTriedFallbackUrl] = useState<boolean>(false);
   const [isLoaded, setIsLoaded] = useState<boolean>(alreadyVerified);
   const [hasFailed, setHasFailed] = useState<boolean>(!isValid);
@@ -73,9 +83,10 @@ const SmartImage = React.memo(function SmartImage({
   // Preload critical LCP candidate as soon as component mounts
   useEffect(() => {
     if (isHighPriority && initialResolved) {
-      preloadLCPImage(initialResolved);
+      const targetPreload = getOptimizedWebPUrl(initialResolved, type) || initialResolved;
+      preloadLCPImage(targetPreload);
     }
-  }, [isHighPriority, initialResolved]);
+  }, [isHighPriority, initialResolved, type]);
 
   // Progressive Viewport Intersection Observer:
   // Attaches singleton observer to container; defers off-screen image fetching
@@ -98,12 +109,13 @@ const SmartImage = React.memo(function SmartImage({
     if (retryTimeoutRef.current) {
       clearTimeout(retryTimeoutRef.current);
     }
-    const nextUrl = resolveImageUrl(src);
-    if (!isValidImageUrl(src) || !nextUrl) {
+    const nextRawUrl = resolveImageUrl(src);
+    if (!isValidImageUrl(src) || !nextRawUrl) {
       const secondary = resolveImageUrl(fallbackUrl);
       if (secondary && isValidImageUrl(secondary)) {
-        setCurrentSrc(secondary);
+        setCurrentSrc(getOptimizedWebPUrl(secondary, type) || secondary);
         setRetryCount(0);
+        setTriedOriginalUrl(false);
         setTriedFallbackUrl(true);
         setIsLoaded(isImageVerified(secondary));
         setHasFailed(false);
@@ -116,28 +128,39 @@ const SmartImage = React.memo(function SmartImage({
       return;
     }
 
-    setCurrentSrc(nextUrl);
+    const nextTarget = getOptimizedWebPUrl(nextRawUrl, type) || nextRawUrl;
+    setCurrentSrc(nextTarget);
     setRetryCount(0);
+    setTriedOriginalUrl(false);
     setTriedFallbackUrl(false);
     setHasFailed(false);
-    setIsLoaded(isImageVerified(nextUrl));
+    setIsLoaded(isImageVerified(nextTarget) || isImageVerified(nextRawUrl));
 
     if (isHighPriority) {
-      preloadLCPImage(nextUrl);
+      preloadLCPImage(nextTarget);
     }
 
     return () => {
       if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
     };
-  }, [src, fallbackUrl, defaultFallback, isHighPriority]);
+  }, [src, fallbackUrl, defaultFallback, isHighPriority, type]);
 
-  // Handle browser load error with automatic retries before falling back
+  // Handle browser load error with automatic fallback: WebP -> Original -> Mirrors -> Secondary -> SVG
   const handleImageError = () => {
-    // 1. Retry primary URL up to 2 times automatically with mirrors or cache-busters
+    const rawOriginal = resolveImageUrl(src);
+
+    // 1. If WebP proxy failed, immediately fall back to raw unproxied original URL
+    if (!triedOriginalUrl && rawOriginal && currentSrc !== rawOriginal) {
+      setTriedOriginalUrl(true);
+      setCurrentSrc(rawOriginal);
+      return;
+    }
+
+    // 2. Retry primary URL up to 2 times automatically with mirrors or cache-busters
     if (retryCount < 2 && !triedFallbackUrl) {
       const nextAttempt = retryCount + 1;
       setRetryCount(nextAttempt);
-      const baseOriginal = resolveImageUrl(src) || currentSrc;
+      const baseOriginal = rawOriginal || currentSrc;
       const retryUrl = getAlternativeImageCandidates(baseOriginal, nextAttempt);
 
       retryTimeoutRef.current = setTimeout(() => {
@@ -146,7 +169,7 @@ const SmartImage = React.memo(function SmartImage({
       return;
     }
 
-    // 2. Try explicit secondary fallback if provided (e.g. poster for banner or banner for poster)
+    // 3. Try explicit secondary fallback if provided (e.g. poster for banner or banner for poster)
     if (fallbackUrl && !triedFallbackUrl) {
       const secondary = resolveImageUrl(fallbackUrl);
       if (secondary && isValidImageUrl(secondary) && secondary !== currentSrc) {
@@ -157,7 +180,7 @@ const SmartImage = React.memo(function SmartImage({
       }
     }
 
-    // 3. Show crisp vector fallback image ONLY after all automatic retries fail
+    // 4. Show crisp vector fallback image ONLY after all automatic retries fail
     setCurrentSrc(defaultFallback);
     setIsLoaded(true);
     setHasFailed(true);
@@ -222,6 +245,16 @@ const SmartImage = React.memo(function SmartImage({
       />
     </div>
   );
-});
+};
 
-export default SmartImage;
+export default React.memo(SmartImage, (prev, next) => {
+  return (
+    prev.src === next.src &&
+    prev.fallbackUrl === next.fallbackUrl &&
+    prev.alt === next.alt &&
+    prev.type === next.type &&
+    prev.priority === next.priority &&
+    prev.loading === next.loading &&
+    prev.className === next.className
+  );
+});

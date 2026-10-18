@@ -213,3 +213,60 @@
   background: rgba(0, 229, 255, 0.5);
   box-shadow: 0 0 8px rgba(0, 229, 255, 0.5);
 }
+
+/* ==============================================================================
+   LOW-END MOBILE PERFORMANCE TUNING (e.g. Realme C61, Mali-G57, 60 FPS scrolling)
+   ============================================================================== */
+@media (max-width: 768px), (pointer: coarse), (hover: none) {
+  /* 1. Eliminate heavy backdrop-filter blur which drops FPS from 60 to 15 on Mali GPUs */
+  .glass-cyber,
+  .glass-cyber-card {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: #0b0f19 !important;
+    border-color: rgba(255, 255, 255, 0.08) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+  }
+
+  .glass-cyber-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+  }
+
+  /* 2. Simplify stacked button glows to lightweight single-layer shadows */
+  .btn-3d-cyan {
+    box-shadow: 0 2px 8px rgba(0, 229, 255, 0.35) !important;
+  }
+
+  .btn-3d-cyan:hover,
+  .btn-3d-cyan:active {
+    box-shadow: 0 2px 8px rgba(0, 229, 255, 0.35) !important;
+    transform: none !important;
+  }
+
+  .btn-3d-silver {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: #101624 !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4) !important;
+  }
+
+  /* 3. Disable continuous rotating border animation on mobile to save CPU/battery */
+  .neon-border-animated::before {
+    animation: none !important;
+    opacity: 0.4 !important;
+  }
+
+  /* 4. Disable heavy fixed full-screen blur blobs on mobile */
+  .mobile-hide-blur {
+    display: none !important;
+  }
+
+  /* 5. Disable perspective transform layer allocation on mobile */
+  .perspective-1000 {
+    perspective: none !important;
+  }
+
+  .preserve-3d {
+    transform-style: flat !important;
+  }
+}

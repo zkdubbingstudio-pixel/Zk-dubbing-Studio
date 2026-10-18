@@ -40,9 +40,24 @@ export default function Home() {
   const [newDrops, setNewDrops] = useState<any[]>(initialCatalog?.newDrops || []);
   const [allAnime, setAllAnime] = useState<any[]>(initialCatalog?.allAnime || []);
   const [selectedGenre, setSelectedGenre] = useState<string>('All');
+  const [visibleGenreCount, setVisibleGenreCount] = useState(18);
+  const [belowFoldReady, setBelowFoldReady] = useState(false);
   const [loading, setLoading] = useState(!hasCachedData);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+
+  // Progressive section mounting: allow initial paint of Hero/Drops first
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const timer = setTimeout(() => {
+      setBelowFoldReady(true);
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    setVisibleGenreCount(18);
+  }, [selectedGenre]);
 
   const fetchData = useCallback(async () => {
     if (!hasCachedData) {
@@ -319,80 +334,88 @@ export default function Home() {
           </section>
         )}
 
-        {/* 4. Trending Now (With Netflix / Crunchyroll 3D Rank Badges) */}
+        {/* 4. Trending Now (Deferred below-the-fold for instant initial paint) */}
         {trending.length > 0 && (
-          <section className="px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-end mb-6">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#00b4d8]/20 to-[#00e5ff]/20 flex items-center justify-center border border-[#00e5ff]/30 shadow-[0_0_15px_rgba(0,229,255,0.3)]">
-                  <Flame className="w-5 h-5 text-brand" />
+          belowFoldReady ? (
+            <section className="px-4 sm:px-6 lg:px-8" style={{ contentVisibility: 'auto', containIntrinsicSize: '1px 340px' }}>
+              <div className="flex justify-between items-end mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#00b4d8]/20 to-[#00e5ff]/20 flex items-center justify-center border border-[#00e5ff]/30 shadow-[0_0_15px_rgba(0,229,255,0.3)]">
+                    <Flame className="w-5 h-5 text-brand" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl sm:text-2xl md:text-3xl font-black text-silver-light tracking-tight">
+                      Trending Now
+                    </h2>
+                    <p className="text-xs text-silver-dark font-medium hidden sm:block">
+                      Top watched anime in Hindi Dub this week
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h2 className="text-xl sm:text-2xl md:text-3xl font-black text-silver-light tracking-tight">
-                    Trending Now
-                  </h2>
-                  <p className="text-xs text-silver-dark font-medium hidden sm:block">
-                    Top watched anime in Hindi Dub this week
-                  </p>
-                </div>
+
+                <Link
+                  to="/search"
+                  className="btn-3d-silver text-xs sm:text-sm font-bold px-4 py-1.5 flex items-center gap-1.5 group"
+                >
+                  <span>View Chart</span>
+                  <span className="transition-transform group-hover:translate-x-1">&rarr;</span>
+                </Link>
               </div>
 
-              <Link
-                to="/search"
-                className="btn-3d-silver text-xs sm:text-sm font-bold px-4 py-1.5 flex items-center gap-1.5 group"
-              >
-                <span>View Chart</span>
-                <span className="transition-transform group-hover:translate-x-1">&rarr;</span>
-              </Link>
-            </div>
-
-            <div className="flex overflow-x-auto snap-x snap-mandatory gap-4 sm:gap-5 pb-6 -mx-4 px-4 sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-              {trending.map((anime: any, index: number) => (
-                <AnimeCard3D
-                  key={anime.id ? `trending-${anime.id}-${index}` : `trending-${index}`}
-                  anime={anime}
-                  rank={index + 1}
-                  className="flex-none w-44 sm:w-52 md:w-60 snap-start"
-                />
-              ))}
-            </div>
-          </section>
+              <div className="flex overflow-x-auto snap-x snap-mandatory gap-4 sm:gap-5 pb-6 -mx-4 px-4 sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                {trending.map((anime: any, index: number) => (
+                  <AnimeCard3D
+                    key={anime.id ? `trending-${anime.id}-${index}` : `trending-${index}`}
+                    anime={anime}
+                    rank={index + 1}
+                    className="flex-none w-44 sm:w-52 md:w-60 snap-start"
+                  />
+                ))}
+              </div>
+            </section>
+          ) : (
+            <div className="px-4 sm:px-6 lg:px-8 h-48 rounded-2xl bg-white/[0.02] border border-white/5" />
+          )
         )}
 
-        {/* 5. Popular Today (Top Rated Section) */}
+        {/* 5. Popular Today (Deferred below-the-fold) */}
         {popularToday.length > 0 && (
-          <section className="px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-end mb-6">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-[#00e5ff]/15 flex items-center justify-center border border-[#00e5ff]/30 shadow-[0_0_15px_rgba(0,229,255,0.3)]">
-                  <Trophy className="w-5 h-5 text-brand" />
-                </div>
-                <div>
-                  <h2 className="text-xl sm:text-2xl md:text-3xl font-black text-silver-light tracking-tight">
-                    Popular Today
-                  </h2>
-                  <p className="text-xs text-silver-dark font-medium hidden sm:block">
-                    Community favorites and highest-rated series
-                  </p>
+          belowFoldReady ? (
+            <section className="px-4 sm:px-6 lg:px-8" style={{ contentVisibility: 'auto', containIntrinsicSize: '1px 340px' }}>
+              <div className="flex justify-between items-end mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-[#00e5ff]/15 flex items-center justify-center border border-[#00e5ff]/30 shadow-[0_0_15px_rgba(0,229,255,0.3)]">
+                    <Trophy className="w-5 h-5 text-brand" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl sm:text-2xl md:text-3xl font-black text-silver-light tracking-tight">
+                      Popular Today
+                    </h2>
+                    <p className="text-xs text-silver-dark font-medium hidden sm:block">
+                      Community favorites and highest-rated series
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div className="flex overflow-x-auto snap-x snap-mandatory gap-4 sm:gap-5 pb-6 -mx-4 px-4 sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-              {popularToday.map((anime: any, index: number) => (
-                <AnimeCard3D
-                  key={`popular-${anime.id}-${index}`}
-                  anime={anime}
-                  badgeTopRight="1080P"
-                  className="flex-none w-44 sm:w-52 md:w-60 snap-start"
-                />
-              ))}
-            </div>
-          </section>
+              <div className="flex overflow-x-auto snap-x snap-mandatory gap-4 sm:gap-5 pb-6 -mx-4 px-4 sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                {popularToday.map((anime: any, index: number) => (
+                  <AnimeCard3D
+                    key={`popular-${anime.id}-${index}`}
+                    anime={anime}
+                    badgeTopRight="1080P"
+                    className="flex-none w-44 sm:w-52 md:w-60 snap-start"
+                  />
+                ))}
+              </div>
+            </section>
+          ) : (
+            <div className="px-4 sm:px-6 lg:px-8 h-48 rounded-2xl bg-white/[0.02] border border-white/5" />
+          )
         )}
 
         {/* 6. Genres with Animated Chips & Dynamic 3D Grid */}
-        <section className="px-4 sm:px-6 lg:px-8 space-y-6">
+        <section className="px-4 sm:px-6 lg:px-8 space-y-6" style={{ contentVisibility: 'auto', containIntrinsicSize: '1px 450px' }}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/5 pb-4">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl bg-[#00e5ff]/15 flex items-center justify-center border border-[#00e5ff]/30 shadow-[0_0_15px_rgba(0,229,255,0.3)]">
@@ -423,17 +446,32 @@ export default function Home() {
             onSelectGenre={setSelectedGenre}
           />
 
-          {/* Filtered Grid or Clean Empty State (Requirement 6) */}
+          {/* Filtered Grid with Progressive Visibility */}
           {filteredAnime.length > 0 ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-5 pt-2">
-              {filteredAnime.map((anime: any, index: number) => (
-                <AnimeCard3D
-                  key={`filter-${anime.id}-${index}`}
-                  anime={anime}
-                  className="w-full"
-                />
-              ))}
-            </div>
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-5 pt-2">
+                {filteredAnime.slice(0, visibleGenreCount).map((anime: any, index: number) => (
+                  <AnimeCard3D
+                    key={`filter-${anime.id}-${index}`}
+                    anime={anime}
+                    className="w-full"
+                  />
+                ))}
+              </div>
+
+              {filteredAnime.length > visibleGenreCount && (
+                <div className="flex justify-center pt-8">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleGenreCount((prev) => prev + 18)}
+                    className="btn-3d-cyan px-8 py-3 text-xs font-bold cursor-pointer flex items-center gap-2"
+                  >
+                    <span>LOAD MORE TITLES</span>
+                    <span className="text-[11px] opacity-80">({filteredAnime.length - visibleGenreCount} remaining)</span>
+                  </button>
+                </div>
+              )}
+            </>
           ) : (
             <div className="text-center py-16 px-4 glass-cyber-card rounded-3xl border border-white/10 my-6">
               <Film className="w-12 h-12 text-[#00e5ff]/40 mx-auto mb-3" />

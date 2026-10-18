@@ -11,7 +11,6 @@ interface HeroSliderProps {
 const HeroSlider = React.memo(function HeroSlider({ featuredList }: HeroSliderProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
-  const [mouseOffset, setMouseOffset] = useState({ x: 0, y: 0 });
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [touchEnd, setTouchEnd] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -58,7 +57,7 @@ const HeroSlider = React.memo(function HeroSlider({ featuredList }: HeroSliderPr
     return () => clearInterval(timer);
   }, [featuredList.length, isPaused, nextSlide]);
 
-  // Parallax mouse move with RAF throttling (desktop only)
+  // Parallax mouse move with zero-rerender CSS variables (desktop only)
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isFinePointer || !containerRef.current) return;
     if (rafId.current) return;
@@ -72,14 +71,18 @@ const HeroSlider = React.memo(function HeroSlider({ featuredList }: HeroSliderPr
       const rect = containerRef.current.getBoundingClientRect();
       const x = (clientX - rect.left - rect.width / 2) / (rect.width / 2);
       const y = (clientY - rect.top - rect.height / 2) / (rect.height / 2);
-      setMouseOffset({ x: x * 15, y: y * 10 });
+      containerRef.current.style.setProperty('--hero-mx', `${(x * 15).toFixed(1)}px`);
+      containerRef.current.style.setProperty('--hero-my', `${(y * 10).toFixed(1)}px`);
     });
   };
 
   const handleMouseLeave = () => {
     if (rafId.current) cancelAnimationFrame(rafId.current);
     setIsPaused(false);
-    setMouseOffset({ x: 0, y: 0 });
+    if (containerRef.current) {
+      containerRef.current.style.setProperty('--hero-mx', '0px');
+      containerRef.current.style.setProperty('--hero-my', '0px');
+    }
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -142,7 +145,7 @@ const HeroSlider = React.memo(function HeroSlider({ featuredList }: HeroSliderPr
               className="absolute inset-0 w-full h-full overflow-hidden transition-transform duration-500 ease-out"
               style={{
                 transform: isCurrent
-                  ? `scale(1.06) translate(${mouseOffset.x * -0.3}px, ${mouseOffset.y * -0.3}px)`
+                  ? 'scale(1.06) translate(calc(var(--hero-mx, 0px) * -0.3), calc(var(--hero-my, 0px) * -0.3))'
                   : 'scale(1)',
               }}
             >
@@ -179,7 +182,7 @@ const HeroSlider = React.memo(function HeroSlider({ featuredList }: HeroSliderPr
                 }`}
                 style={{
                   transform: isCurrent
-                    ? `translate(${mouseOffset.x * 0.6}px, ${mouseOffset.y * 0.6}px)`
+                    ? 'translate(calc(var(--hero-mx, 0px) * 0.6), calc(var(--hero-my, 0px) * 0.6))'
                     : 'translateY(30px)',
                 }}
               >

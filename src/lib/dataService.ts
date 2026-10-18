@@ -1639,8 +1639,11 @@ export async function getAllEpisodes(publishedOnly = true): Promise<EpisodeItem[
   }
 }
 
-// 11. Fetch All Genres from Supabase
+// 11. Fetch All Genres from Supabase (with caching)
 export async function getGenres(): Promise<string[]> {
+  const cached = getCachedData<string[]>('all_genres');
+  if (cached && cached.length > 0) return cached;
+
   const animeTable = await getActiveAnimeTable();
 
   try {
@@ -1658,12 +1661,16 @@ export async function getGenres(): Promise<string[]> {
         }
       });
       if (set.size > 0) {
-        return ['All', ...Array.from(set).sort()];
+        const result = ['All', ...Array.from(set).sort()];
+        setCachedData('all_genres', result);
+        return result;
       }
     }
   } catch {}
 
-  return ['All', 'Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Romance', 'Sci-Fi', 'Supernatural'];
+  const fallback = ['All', 'Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Romance', 'Sci-Fi', 'Supernatural'];
+  setCachedData('all_genres', fallback);
+  return fallback;
 }
 
 // -------------------------------------------------------------
@@ -2335,6 +2342,10 @@ export const deleteEpisode = deleteEpisodeBoth;
 
 export async function getUserProgress(userId: string): Promise<any[]> {
   if (!userId) return [];
+  const cacheKey = `user_progress_${userId}`;
+  const cached = getCachedData<any[]>(cacheKey);
+  if (cached && Array.isArray(cached)) return cached;
+
   try {
     const res = await executeSupabaseWithRetry(async () => {
       return await supabase
@@ -2345,6 +2356,7 @@ export async function getUserProgress(userId: string): Promise<any[]> {
     });
 
     if (res?.data && res.data.length > 0) {
+      setCachedData(cacheKey, res.data);
       return res.data;
     }
   } catch {
@@ -2368,6 +2380,7 @@ export async function saveUserProgress(progress: {
 }): Promise<void> {
   const currentUid = auth.currentUser?.uid;
   if (!currentUid || currentUid !== progress.userId || !progress.episodeId) return;
+  clearCachedData(`user_progress_${progress.userId}`);
   try {
     await supabase.from('user_progress').upsert({
       user_id: progress.userId,
@@ -2391,6 +2404,7 @@ export async function saveUserProgress(progress: {
 export async function deleteUserProgress(userId: string, episodeId: string): Promise<void> {
   const currentUid = auth.currentUser?.uid;
   if (!currentUid || currentUid !== userId || !episodeId) return;
+  clearCachedData(`user_progress_${userId}`);
   try {
     await supabase.from('user_progress').delete().match({ user_id: userId, episode_id: episodeId });
   } catch {
@@ -2399,7 +2413,7 @@ export async function deleteUserProgress(userId: string, episodeId: string): Pro
 }
 
 // -------------------------------------------------------------
-// WATCH HISTORY, FAVORITES & WATCHLIST (SUPABASE ONLY)
+// WATCH HISTORY, FAVORITES & WATCHLIST (SUPABASE ONLY WITH CACHE)
 // -------------------------------------------------------------
 
 export async function getWatchHistory(userId: string): Promise<any[]> {
@@ -2422,6 +2436,10 @@ export async function getWatchHistory(userId: string): Promise<any[]> {
 
 export async function getFavorites(userId: string): Promise<any[]> {
   if (!userId) return [];
+  const cacheKey = `favorites_${userId}`;
+  const cached = getCachedData<any[]>(cacheKey);
+  if (cached && Array.isArray(cached)) return cached;
+
   try {
     const res = await executeSupabaseWithRetry(async () => {
       return await supabase
@@ -2430,7 +2448,10 @@ export async function getFavorites(userId: string): Promise<any[]> {
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
     });
-    if (res?.data) return res.data;
+    if (res?.data) {
+      setCachedData(cacheKey, res.data);
+      return res.data;
+    }
   } catch {
     // return empty state
   }
@@ -2443,6 +2464,7 @@ export async function addFavorite(
 ): Promise<void> {
   const currentUid = auth.currentUser?.uid;
   if (!currentUid || currentUid !== userId || !anime.id) return;
+  clearCachedData(`favorites_${userId}`);
   try {
     await supabase.from('favorites').upsert({
       user_id: userId,
@@ -2459,6 +2481,7 @@ export async function addFavorite(
 export async function removeFavorite(userId: string, animeId: string): Promise<void> {
   const currentUid = auth.currentUser?.uid;
   if (!currentUid || currentUid !== userId || !animeId) return;
+  clearCachedData(`favorites_${userId}`);
   try {
     await supabase.from('favorites').delete().match({ user_id: userId, anime_id: animeId });
   } catch {
@@ -2468,6 +2491,12 @@ export async function removeFavorite(userId: string, animeId: string): Promise<v
 
 export async function isFavorite(userId: string, animeId: string): Promise<boolean> {
   if (!userId || !animeId) return false;
+  // Check cached favorites first
+  const cached = getCachedData<any[]>(`favorites_${userId}`);
+  if (cached && Array.isArray(cached)) {
+    return cached.some((f: any) => f.anime_id === animeId || f.id === animeId);
+  }
+
   try {
     const { data } = await supabase
       .from('favorites')
@@ -2482,6 +2511,10 @@ export async function isFavorite(userId: string, animeId: string): Promise<boole
 
 export async function getWatchlist(userId: string): Promise<any[]> {
   if (!userId) return [];
+  const cacheKey = `watchlist_${userId}`;
+  const cached = getCachedData<any[]>(cacheKey);
+  if (cached && Array.isArray(cached)) return cached;
+
   try {
     const res = await executeSupabaseWithRetry(async () => {
       return await supabase
@@ -2490,7 +2523,10 @@ export async function getWatchlist(userId: string): Promise<any[]> {
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
     });
-    if (res?.data) return res.data;
+    if (res?.data) {
+      setCachedData(cacheKey, res.data);
+      return res.data;
+    }
   } catch {
     // return empty state
   }
@@ -2503,6 +2539,7 @@ export async function addToWatchlist(
 ): Promise<void> {
   const currentUid = auth.currentUser?.uid;
   if (!currentUid || currentUid !== userId || !anime.id) return;
+  clearCachedData(`watchlist_${userId}`);
   try {
     await supabase.from('watchlist').upsert({
       user_id: userId,
@@ -2520,6 +2557,7 @@ export async function addToWatchlist(
 export async function removeFromWatchlist(userId: string, animeId: string): Promise<void> {
   const currentUid = auth.currentUser?.uid;
   if (!currentUid || currentUid !== userId || !animeId) return;
+  clearCachedData(`watchlist_${userId}`);
   try {
     await supabase.from('watchlist').delete().match({ user_id: userId, anime_id: animeId });
   } catch {

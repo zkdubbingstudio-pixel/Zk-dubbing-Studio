@@ -17,7 +17,7 @@ interface AnimeCard3DProps {
   priority?: boolean;
 }
 
-const AnimeCard3D = React.memo(function AnimeCard3D({
+function AnimeCard3D({
   anime,
   rank,
   badgeTopLeft,
@@ -290,6 +290,21 @@ const AnimeCard3D = React.memo(function AnimeCard3D({
       </Link>
     </div>
   );
-});
+}
 
-export default AnimeCard3D;
+export default React.memo(AnimeCard3D, (prev, next) => {
+  return (
+    (prev.anime?.id || prev.anime?.dropId) === (next.anime?.id || next.anime?.dropId) &&
+    prev.anime?.title === next.anime?.title &&
+    prev.anime?.poster_url === next.anime?.poster_url &&
+    prev.anime?.banner_url === next.anime?.banner_url &&
+    prev.anime?.rating === next.anime?.rating &&
+    prev.rank === next.rank &&
+    prev.badgeTopLeft === next.badgeTopLeft &&
+    prev.badgeTopRight === next.badgeTopRight &&
+    prev.badgeBottomLeft === next.badgeBottomLeft &&
+    prev.aspectRatio === next.aspectRatio &&
+    prev.priority === next.priority &&
+    prev.className === next.className
+  );
+});
