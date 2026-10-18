@@ -3,6 +3,7 @@ import { Play, Clock, ArrowLeft, Star, MonitorPlay } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { getAnimeById, getSeasonsByAnimeId, getEpisodesByAnimeId } from '../lib/dataService';
 import SmartImage from '../components/SmartImage';
+import { resolveEpisodeImage } from '../lib/imageUtils';
 
 export default function SeasonDetails() {
   const { id, seasonId } = useParams();
@@ -150,9 +151,10 @@ export default function SeasonDetails() {
                 {/* Thumbnail container (Requirements 2, 6, 9) */}
                 <div className="relative w-full sm:w-48 aspect-video rounded-lg overflow-hidden flex-shrink-0 bg-black/50">
                   <SmartImage 
-                    src={anime?.poster_url || anime?.posterUrl || ep.thumbnailUrl || ep.thumbnail_url || ""} 
+                    src={resolveEpisodeImage(ep, anime)} 
+                    fallbackUrl={anime?.poster_url || anime?.posterUrl || ''}
                     alt={ep.title || `Episode ${ep.episodeNumber || ep.episode_number}`}
-                    type="poster"
+                    type="thumbnail"
                     loading="lazy"
                     className="w-full h-full opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-300"
                     style={{ objectFit: 'cover', objectPosition: 'center center' }}

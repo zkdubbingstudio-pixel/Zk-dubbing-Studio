@@ -12,6 +12,7 @@ import {
   getActiveAnimeTable,
 } from '../lib/dataService';
 import { checkSupabaseConnection, supabaseUrl } from '../lib/supabase';
+import { getCachedData } from '../lib/cache';
 import HeroSlider from '../components/HeroSlider';
 import AnimeCard3D from '../components/AnimeCard3D';
 import ContinueWatchingRow from '../components/ContinueWatchingRow';
@@ -31,17 +32,22 @@ const GENRE_LIST = [
 ];
 
 export default function Home() {
-  const [featuredList, setFeaturedList] = useState<any[]>([]);
-  const [trending, setTrending] = useState<any[]>([]);
-  const [newDrops, setNewDrops] = useState<any[]>([]);
-  const [allAnime, setAllAnime] = useState<any[]>([]);
+  const initialCatalog = getCachedData<any>('unified_app_catalog');
+  const hasCachedData = Boolean(initialCatalog && initialCatalog.allAnime && initialCatalog.allAnime.length > 0);
+
+  const [featuredList, setFeaturedList] = useState<any[]>(initialCatalog?.featuredAnime || []);
+  const [trending, setTrending] = useState<any[]>(initialCatalog?.trendingAnime || []);
+  const [newDrops, setNewDrops] = useState<any[]>(initialCatalog?.newDrops || []);
+  const [allAnime, setAllAnime] = useState<any[]>(initialCatalog?.allAnime || []);
   const [selectedGenre, setSelectedGenre] = useState<string>('All');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!hasCachedData);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
+    if (!hasCachedData) {
+      setLoading(true);
+    }
     setError(null);
     setRetrying(true);
 

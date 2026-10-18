@@ -1,18 +1,30 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search as SearchIcon, Filter, Sparkles, Film } from 'lucide-react';
+import { Search as SearchIcon, Filter, Sparkles, Film, Loader2 } from 'lucide-react';
 import { supabase, executeSupabaseWithRetry } from '../lib/supabase';
 import { normalizeAnime, getGenres, getActiveAnimeTable, getLocalAnimeList } from '../lib/dataService';
+import { getCachedData, setCachedData } from '../lib/cache';
 import AnimeCard3D from '../components/AnimeCard3D';
 import GenreChipsBar from '../components/GenreChipsBar';
+
+const PAGE_SIZE = 24;
+const SEARCH_FIELDS = 'id, title, poster_url, banner_url, rating, views, type, release_year, genres, created_at';
 
 export default function Search() {
   const [searchParams] = useSearchParams();
   const [query, setQuery] = useState('');
   const [selectedGenre, setSelectedGenre] = useState<string>('All');
   const [genresList, setGenresList] = useState<string[]>(['All']);
-  const [results, setResults] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  
+  // Instant initial population from warm catalog cache for 0ms load
+  const cachedCatalog = getCachedData<any>('unified_app_catalog');
+  const initialResults = cachedCatalog?.allAnime?.slice(0, PAGE_SIZE) || [];
+
+  const [results, setResults] = useState<any[]>(initialResults);
+  const [loading, setLoading] = useState(initialResults.length === 0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
 
   // Sync category or genre from query params
   useEffect(() => {
@@ -36,71 +48,87 @@ export default function Search() {
     };
   }, []);
 
-  // Search directly in Supabase (reads from detected active table - Requirement 1, 2, 7)
-  useEffect(() => {
-    let isMounted = true;
-
-    const fetchSearch = async () => {
+  // Search directly in Supabase with field projection and pagination (Requirement 3: Fetch only required fields & pagination)
+  const fetchPage = useCallback(async (pageIndex: number, isInitial = false) => {
+    if (isInitial) {
       setLoading(true);
-      try {
-        const cleanQuery = query.trim().toLowerCase();
-        const activeTable = await getActiveAnimeTable();
+    } else {
+      setLoadingMore(true);
+    }
+
+    try {
+      const cleanQuery = query.trim().toLowerCase();
+      const activeTable = await getActiveAnimeTable();
+      const from = pageIndex * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+
+      const res = await executeSupabaseWithRetry(async () => {
+        let q = supabase.from(activeTable).select(SEARCH_FIELDS);
+
+        if (query.trim()) {
+          q = q.ilike('title', `%${query.trim()}%`);
+        }
+
+        if (selectedGenre !== 'All') {
+          q = q.contains('genres', [selectedGenre]);
+        }
+
+        return await q.order('created_at', { ascending: false }).range(from, to);
+      });
+
+      const fetchedData = res?.data || [];
+      const remote = fetchedData.map((item: any) => {
+        const norm = normalizeAnime(item, item.id);
+        // Pre-warm individual item cache for 0ms navigation
+        setCachedData(`anime_${norm.id}`, norm);
+        return norm;
+      });
+
+      if (isInitial) {
+        // Also merge any local items for resilience
         const localList = getLocalAnimeList().filter(a => {
           const matchTitle = !cleanQuery || a.title.toLowerCase().includes(cleanQuery);
           const matchGenre = selectedGenre === 'All' || (Array.isArray(a.genres) && a.genres.some((g: string) => g.toLowerCase() === selectedGenre.toLowerCase()));
           return matchTitle && matchGenre;
         });
 
-        const res = await executeSupabaseWithRetry(async () => {
-          let q = supabase.from(activeTable).select('*');
-
-          if (query.trim()) {
-            q = q.ilike('title', `%${query.trim()}%`);
-          }
-
-          if (selectedGenre !== 'All') {
-            q = q.contains('genres', [selectedGenre]);
-          }
-
-          return await q.order('created_at', { ascending: false }).limit(60);
-        });
-
-        if (isMounted) {
-          if (res?.data && res.data.length > 0) {
-            const remote = res.data.map((item: any) => normalizeAnime(item, item.id));
-            const remoteIds = new Set(remote.map(r => r.id));
-            const unSynced = localList.filter(l => !remoteIds.has(l.id));
-            setResults([...unSynced, ...remote]);
-          } else {
-            setResults(localList);
-          }
-          setLoading(false);
-        }
-      } catch (err) {
-        if (isMounted) {
-          const cleanQuery = query.trim().toLowerCase();
-          const localList = getLocalAnimeList().filter(a => {
-            const matchTitle = !cleanQuery || a.title.toLowerCase().includes(cleanQuery);
-            const matchGenre = selectedGenre === 'All' || (Array.isArray(a.genres) && a.genres.some((g: string) => g.toLowerCase() === selectedGenre.toLowerCase()));
-            return matchTitle && matchGenre;
-          });
-          setResults(localList);
-          setLoading(false);
-        }
+        const remoteIds = new Set(remote.map(r => r.id));
+        const unSynced = localList.filter(l => !remoteIds.has(l.id));
+        const combined = [...unSynced, ...remote];
+        setResults(combined);
+        setHasMore(fetchedData.length === PAGE_SIZE);
+      } else {
+        setResults(prev => [...prev, ...remote]);
+        setHasMore(fetchedData.length === PAGE_SIZE);
       }
-    };
-
-    const debounce = setTimeout(() => fetchSearch(), 200);
-    const tenSecTimeout = setTimeout(() => {
-      if (isMounted) setLoading(false);
-    }, 10000);
-
-    return () => {
-      isMounted = false;
-      clearTimeout(debounce);
-      clearTimeout(tenSecTimeout);
-    };
+    } catch {
+      // Graceful fallback to cached/local
+      if (isInitial) {
+        const localList = getLocalAnimeList();
+        setResults(localList.slice(0, PAGE_SIZE));
+        setHasMore(false);
+      }
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
   }, [query, selectedGenre]);
+
+  useEffect(() => {
+    setPage(0);
+    const debounce = setTimeout(() => {
+      fetchPage(0, true);
+    }, 200);
+
+    return () => clearTimeout(debounce);
+  }, [query, selectedGenre, fetchPage]);
+
+  const handleLoadMore = () => {
+    if (loadingMore || !hasMore) return;
+    const nextPage = page + 1;
+    setPage(nextPage);
+    fetchPage(nextPage, false);
+  };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-10">
@@ -171,7 +199,7 @@ export default function Search() {
               : 'Featured & Popular Catalog'}
           </h2>
           <span className="text-xs font-bold text-silver-dark bg-white/5 px-3 py-1 rounded-full border border-white/10">
-            {results.length} Found
+            {results.length} Titles
           </span>
         </div>
 
@@ -182,15 +210,31 @@ export default function Search() {
             ))}
           </div>
         ) : results.length > 0 ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-5">
-            {results.map((anime: any, index: number) => (
-              <AnimeCard3D
-                key={anime.id ? `search-${anime.id}-${index}` : `search-${index}`}
-                anime={anime}
-                className="w-full"
-              />
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-5">
+              {results.map((anime: any, index: number) => (
+                <AnimeCard3D
+                  key={anime.id ? `search-${anime.id}-${index}` : `search-${index}`}
+                  anime={anime}
+                  className="w-full"
+                />
+              ))}
+            </div>
+
+            {/* Pagination Controls */}
+            {hasMore && (
+              <div className="mt-12 flex justify-center">
+                <button
+                  onClick={handleLoadMore}
+                  disabled={loadingMore}
+                  className="btn-3d-cyan px-8 py-3.5 text-xs sm:text-sm font-black flex items-center gap-2 cursor-pointer shadow-[0_0_20px_rgba(0,229,255,0.3)] disabled:opacity-50"
+                >
+                  {loadingMore && <Loader2 className="w-4 h-4 animate-spin" />}
+                  <span>{loadingMore ? 'LOADING MORE...' : 'LOAD MORE TITLES'}</span>
+                </button>
+              </div>
+            )}
+          </>
         ) : (
           <div className="text-center py-20 px-4 glass-cyber-card rounded-3xl border border-white/10 max-w-md mx-auto">
             <Film className="w-12 h-12 text-[#00e5ff]/40 mx-auto mb-3" />

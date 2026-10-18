@@ -1,48 +1,45 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Play, Info, ChevronLeft, ChevronRight, Volume2, Sparkles, Star } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getEpisodesByAnimeId } from '../lib/dataService';
+import { getCachedData } from '../lib/cache';
 import SmartImage from './SmartImage';
 
 interface HeroSliderProps {
   featuredList: any[];
 }
 
-export default function HeroSlider({ featuredList }: HeroSliderProps) {
+const HeroSlider = React.memo(function HeroSlider({ featuredList }: HeroSliderProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
-  const [playLinks, setPlayLinks] = useState<Record<string, string>>({});
   const [mouseOffset, setMouseOffset] = useState({ x: 0, y: 0 });
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [touchEnd, setTouchEnd] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const rafId = useRef<number | null>(null);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const fetchPlayLinks = async () => {
-      const links: Record<string, string> = {};
-      await Promise.all(
-        featuredList.map(async (anime) => {
-          try {
-            const eps = await getEpisodesByAnimeId(anime.id);
-            if (eps && eps.length > 0) {
-              const latest = eps[eps.length - 1] || eps[0];
-              links[anime.id] = `/watch/${anime.id}/${latest.seasonId}/${latest.id}`;
-            } else {
-              links[anime.id] = `/anime/${anime.id}`;
-            }
-          } catch {
-            links[anime.id] = `/anime/${anime.id}`;
-          }
-        })
-      );
-      setPlayLinks(links);
-    };
+  const isFinePointer = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
 
-    if (featuredList.length > 0) {
-      fetchPlayLinks();
+  // Resolve watch target immediately without making extra API queries on mount (Requirement 5 & 6)
+  const getWatchTarget = useCallback((anime: any): string => {
+    if (!anime) return '/';
+    // 1. If anime already has episodes embedded from unified catalog
+    if (Array.isArray(anime.episodes) && anime.episodes.length > 0) {
+      const ep = anime.episodes[0];
+      return `/watch/${anime.id}/${ep.season_id || ep.seasonId || 's1'}/${ep.id}`;
     }
-  }, [featuredList]);
+    // 2. Check cached episodes
+    const allEps = getCachedData<any[]>('all_episodes');
+    if (allEps) {
+      const match = allEps.find(e => (e.animeId === anime.id || e.anime_id === anime.id) && Number(e.episodeNumber || 1) === 1) ||
+                    allEps.find(e => e.animeId === anime.id || e.anime_id === anime.id);
+      if (match) {
+        return `/watch/${anime.id}/${match.seasonId || match.season_id || 's1'}/${match.id}`;
+      }
+    }
+    // 3. Fallback: navigate to watch page with animeId which auto-resolves episode 1 in 0ms
+    return `/watch/${anime.id}`;
+  }, []);
 
   const nextSlide = useCallback(() => {
     setCurrentIndex((prev) => (prev === featuredList.length - 1 ? 0 : prev + 1));
@@ -61,16 +58,26 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
     return () => clearInterval(timer);
   }, [featuredList.length, isPaused, nextSlide]);
 
-  // Parallax mouse move
+  // Parallax mouse move with RAF throttling (desktop only)
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left - rect.width / 2) / (rect.width / 2);
-    const y = (e.clientY - rect.top - rect.height / 2) / (rect.height / 2);
-    setMouseOffset({ x: x * 15, y: y * 10 });
+    if (!isFinePointer || !containerRef.current) return;
+    if (rafId.current) return;
+
+    const clientX = e.clientX;
+    const clientY = e.clientY;
+
+    rafId.current = requestAnimationFrame(() => {
+      rafId.current = null;
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const x = (clientX - rect.left - rect.width / 2) / (rect.width / 2);
+      const y = (clientY - rect.top - rect.height / 2) / (rect.height / 2);
+      setMouseOffset({ x: x * 15, y: y * 10 });
+    });
   };
 
   const handleMouseLeave = () => {
+    if (rafId.current) cancelAnimationFrame(rafId.current);
     setIsPaused(false);
     setMouseOffset({ x: 0, y: 0 });
   };
@@ -98,6 +105,12 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
     }
   };
 
+  useEffect(() => {
+    return () => {
+      if (rafId.current) cancelAnimationFrame(rafId.current);
+    };
+  }, []);
+
   if (featuredList.length === 0) return null;
 
   return (
@@ -124,7 +137,7 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
               isCurrent ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
             }`}
           >
-            {/* Parallax Background Image with scale & slight movement (Requirements 1, 6, 9) */}
+            {/* Parallax Background Image */}
             <div
               className="absolute inset-0 w-full h-full overflow-hidden transition-transform duration-500 ease-out"
               style={{
@@ -141,22 +154,24 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
                   featured.posterUrl ||
                   ''
                 }
+                fallbackUrl={featured.poster_url || featured.posterUrl || ''}
                 alt={featured.title}
                 type="banner"
                 className="w-full h-full"
                 style={{ objectFit: 'cover', objectPosition: 'center center' }}
-                loading={isCurrent ? 'eager' : 'lazy'}
+                loading={index === 0 ? 'eager' : 'lazy'}
+                priority={index === 0}
                 titleFallback={featured.title}
               />
 
-              {/* Light transparent overlay (15-20%) for text readability while keeping full brightness */}
+              {/* Light transparent overlay for text readability while keeping full brightness */}
               <div className="absolute inset-0 bg-black/15 sm:bg-black/[0.18] pointer-events-none" />
 
-              {/* Subtle bottom gradient only behind text for premium Netflix/Crunchyroll look */}
+              {/* Subtle bottom gradient behind text */}
               <div className="absolute bottom-0 left-0 right-0 h-[70%] sm:h-[55%] bg-gradient-to-t from-[#05070b]/90 via-[#05070b]/40 to-transparent pointer-events-none" />
             </div>
 
-            {/* Content Overlay - Moved slightly upward with optimized mobile spacing */}
+            {/* Content Overlay */}
             <div className="relative z-20 w-full h-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-end pb-9 sm:pb-14 md:pb-18">
               <div
                 className={`max-w-2xl space-y-2 sm:space-y-3.5 md:space-y-4 transition-all duration-700 transform ${
@@ -194,7 +209,7 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
                   )}
                 </div>
 
-                {/* Main Anime Title - Scaled for mobile to prevent overflow */}
+                {/* Main Anime Title */}
                 <h1 className="text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-black tracking-tight text-white leading-[1.12] sm:leading-[1.08] drop-shadow-[0_4px_16px_rgba(0,0,0,0.95)] drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)] line-clamp-2">
                   {featured.title}
                 </h1>
@@ -213,17 +228,17 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
                   </div>
                 )}
 
-                {/* Description - Compact on mobile */}
+                {/* Description */}
                 <p className="text-xs sm:text-sm md:text-base text-silver-light/90 font-medium line-clamp-2 max-w-xl leading-relaxed drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
                   {featured.description}
                 </p>
 
-                {/* 3D Action Buttons - Side-by-side & compact on mobile */}
+                {/* 3D Action Buttons */}
                 <div className="flex items-center gap-2.5 sm:gap-3.5 pt-1 sm:pt-2">
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      navigate(playLinks[featured.id] || `/anime/${featured.id}`);
+                      navigate(getWatchTarget(featured), { state: { anime: featured } });
                     }}
                     className="btn-3d-cyan flex items-center justify-center gap-2 px-5 py-2.5 sm:px-8 sm:py-3.5 text-xs sm:text-sm md:text-base font-black cursor-pointer group/btn"
                   >
@@ -277,7 +292,7 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
         </>
       )}
 
-      {/* Carousel Indicators - Placed closer to bottom */}
+      {/* Carousel Indicators */}
       {featuredList.length > 1 && (
         <div className="absolute bottom-2.5 sm:bottom-4 md:bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-black/60 backdrop-blur-md px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full border border-white/10 shadow-lg">
           {featuredList.map((_, index) => (
@@ -299,4 +314,6 @@ export default function HeroSlider({ featuredList }: HeroSliderProps) {
       )}
     </section>
   );
-}
+});
+
+export default HeroSlider;

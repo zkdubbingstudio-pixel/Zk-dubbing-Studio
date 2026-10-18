@@ -2,7 +2,9 @@ import { useParams, Link, useLocation, useNavigate } from 'react-router-dom';
 import { Play, Send, ChevronDown, Sparkles, Star, Film, Calendar, Clock, Mic, Heart, Bookmark } from 'lucide-react';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuthStore } from '../store/authStore';
+import { getCachedData } from '../lib/cache';
 import SmartImage from '../components/SmartImage';
+import { resolveEpisodeImage } from '../lib/imageUtils';
 import { 
   getAnimeFullDetails,
   getAnimeById, 
@@ -22,12 +24,26 @@ export default function AnimeDetails() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const [anime, setAnime] = useState<any>(location.state?.anime?.id === id && location.state?.anime?.title ? location.state.anime : null);
-  const [seasons, setSeasons] = useState<any[]>([]);
-  const [allEpisodes, setAllEpisodes] = useState<any[]>([]);
-  const [selectedSeason, setSelectedSeason] = useState<string>('');
+  const cachedFull = id ? getCachedData<any>(`anime_full_${id}`) : null;
+  const initialAnime = (location.state?.anime?.id === id && location.state?.anime?.title)
+    ? location.state.anime
+    : (cachedFull?.anime || (id ? getCachedData<any>(`anime_${id}`) : null));
+
+  const initialSeasons = cachedFull?.seasons || (id ? getCachedData<any[]>(`seasons_${id}`) : null) || [];
+  const initialEpisodes = cachedFull?.episodes || (id ? getCachedData<any[]>(`episodes_${id}`) : null) || [];
+
+  const [anime, setAnime] = useState<any>(initialAnime);
+  const [seasons, setSeasons] = useState<any[]>(initialSeasons);
+  const [allEpisodes, setAllEpisodes] = useState<any[]>(initialEpisodes);
+  const [selectedSeason, setSelectedSeason] = useState<string>(() => {
+    if (initialSeasons.length > 0) {
+      const s1 = initialSeasons.find((s: any) => Number(s.seasonNumber) === 1);
+      return s1 ? s1.id : initialSeasons[0].id;
+    }
+    return '';
+  });
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [initialLoading, setInitialLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(!initialAnime && initialEpisodes.length === 0);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const { user, firebaseUser } = useAuthStore();
@@ -115,7 +131,9 @@ export default function AnimeDetails() {
   useEffect(() => {
     if (!id) return;
     let isMounted = true;
-    setInitialLoading(true);
+    if (!initialAnime && initialEpisodes.length === 0) {
+      setInitialLoading(true);
+    }
 
     const fetchData = async () => {
       try {
@@ -280,7 +298,7 @@ export default function AnimeDetails() {
       {/* 1. Centered Hero Background Banner & Vertically Centered Poster (Requirements 1, 2, 6, 9) */}
       <div className="relative w-full overflow-hidden bg-[#05070b]">
         <div
-          className="relative w-full min-h-[360px] sm:min-h-[420px] md:min-h-[480px] lg:min-h-[520px] flex items-center justify-center overflow-hidden"
+          className="relative w-full h-[38vh] min-h-[260px] max-h-[360px] sm:min-h-[400px] sm:h-[48vh] md:min-h-[480px] lg:min-h-[520px] flex items-center justify-center overflow-hidden"
           style={{
             backgroundPosition: 'center center',
             backgroundSize: 'cover',
@@ -291,9 +309,11 @@ export default function AnimeDetails() {
             <div className="absolute inset-0 w-full h-full pointer-events-none">
               <SmartImage
                 src={bannerImg}
+                fallbackUrl={posterImg}
                 alt={anime.title}
                 type="banner"
                 loading="eager"
+                priority={true}
                 className="w-full h-full"
                 style={{
                   objectFit: 'cover',
@@ -306,17 +326,24 @@ export default function AnimeDetails() {
             <div className="absolute inset-0 bg-[#0a0e17]" />
           )}
 
-          {/* Dark gradient overlay (40–60%) for better contrast and text readability */}
-          <div className="absolute inset-0 bg-black/50" />
+          {/* Dark gradient overlay for better contrast and text readability */}
+          <div className="absolute inset-0 bg-black/45" />
           <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-[#05070b]/40 to-transparent" />
           <div className="absolute inset-0 bg-gradient-to-b from-[#05070b]/60 via-transparent to-transparent" />
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-[#00e5ff]/50 to-transparent shadow-[0_0_15px_rgba(0,229,255,0.6)]" />
 
           {/* 2. Poster Centered Vertically Over the Banner with Soft Shadow & Rounded Corners */}
-          <div className="relative z-10 flex items-center justify-center px-4 py-8 sm:py-10">
-            <div className="w-36 sm:w-48 md:w-56 lg:w-64 aspect-[2/3] rounded-2xl sm:rounded-3xl overflow-hidden glass-cyber-card border-2 border-white/20 shadow-[0_15px_45px_rgba(0,0,0,0.85)] hover:border-[#00e5ff]/80 transition-all duration-300 transform hover:scale-105">
+          <div className="relative z-10 flex items-center justify-center px-4 py-6 sm:py-10">
+            <div 
+              className="w-32 sm:w-48 md:w-56 lg:w-64 aspect-[2/3] rounded-2xl sm:rounded-3xl overflow-hidden glass-cyber-card border-2 border-white/20 shadow-[0_15px_45px_rgba(0,0,0,0.85)] hover:border-[#00e5ff]/80 transition-all duration-300 transform hover:scale-105"
+              style={{
+                WebkitMaskImage: '-webkit-radial-gradient(white, black)',
+                isolation: 'isolate',
+              }}
+            >
               <SmartImage
                 src={posterImg}
+                fallbackUrl={bannerImg}
                 alt={anime.title}
                 type="poster"
                 className="w-full h-full rounded-2xl sm:rounded-3xl"
@@ -325,6 +352,7 @@ export default function AnimeDetails() {
                   objectPosition: 'center center',
                 }}
                 loading="eager"
+                priority={true}
                 titleFallback={anime.title}
               />
             </div>
@@ -569,17 +597,10 @@ export default function AnimeDetails() {
                     >
                       <div className="relative w-full aspect-video bg-[#0a0e17] overflow-hidden">
                         <SmartImage
-                          src={
-                            anime.poster_url ||
-                            anime.posterUrl ||
-                            ep.thumbnail_url ||
-                            ep.thumbnailUrl ||
-                            anime.banner_url ||
-                            anime.bannerUrl ||
-                            ''
-                          }
+                          src={resolveEpisodeImage(ep, anime)}
+                          fallbackUrl={anime.poster_url || anime.posterUrl || anime.poster || ''}
                           alt={ep.title || `Episode ${ep.episodeNumber}`}
-                          type="poster"
+                          type="thumbnail"
                           loading="lazy"
                           className="w-full h-full group-hover:scale-105 transition-transform duration-500 opacity-90 group-hover:opacity-100"
                           style={{ objectFit: 'cover', objectPosition: 'center center' }}

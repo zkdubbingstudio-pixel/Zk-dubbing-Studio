@@ -7,8 +7,16 @@
  * 3. Never poisons cache on transient network errors.
  * 4. Resolves ImgBB viewer and direct CDN links.
  * 5. Preconnects to popular anime image hosts (Catbox, ImgBB, Supabase).
- * 6. Optimized for Chrome, Android WebView, Samsung Internet, Edge, and Firefox.
+ * 6. Responsive banner and poster preservation without stretching or distortion.
+ * 7. Strict episode image priority: episode.thumbnail -> episode.poster -> anime.poster.
  */
+
+// Crisp cyberpunk vector fallback anime artwork SVGs
+export const DEFAULT_POSTER_FALLBACK = `data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%22600%22%20height%3D%22900%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20600%20900%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22bg%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%23080c14%22%2F%3E%3Cstop%20offset%3D%2250%25%22%20stop-color%3D%22%230e1726%22%2F%3E%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%2305070b%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20fill%3D%22url(%23bg)%22%2F%3E%3Ccircle%20cx%3D%22300%22%20cy%3D%22420%22%20r%3D%2270%22%20fill%3D%22%2300e5ff%22%20fill-opacity%3D%220.1%22%20stroke%3D%22%2300e5ff%22%20stroke-width%3D%222%22%20stroke-opacity%3D%220.4%22%2F%3E%3Cpolygon%20points%3D%22285%2C385%20335%2C420%20285%2C455%22%20fill%3D%22%2300e5ff%22%2F%3E%3Ctext%20x%3D%22300%22%20y%3D%22530%22%20font-family%3D%22system-ui%2C%20sans-serif%22%20font-size%3D%2220%22%20font-weight%3D%22bold%22%20fill%3D%22%23ffffff%22%20text-anchor%3D%22middle%22%3EZK%20VOICE%20HUB%3C%2Ftext%3E%3Ctext%20x%3D%22300%22%20y%3D%22560%22%20font-family%3D%22system-ui%2C%20sans-serif%22%20font-size%3D%2212%22%20font-weight%3D%22600%22%20letter-spacing%3D%222%22%20fill%3D%22%2300e5ff%22%20text-anchor%3D%22middle%22%3EHINDI%20DUBBED%20ANIME%3C%2Ftext%3E%3C%2Fsvg%3E`;
+
+export const DEFAULT_BANNER_FALLBACK = `data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%221920%22%20height%3D%221080%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%201920%201080%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22banner-bg%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%2304070e%22%2F%3E%3Cstop%20offset%3D%2250%25%22%20stop-color%3D%22%230b121e%22%2F%3E%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%2305070b%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20fill%3D%22url(%23banner-bg)%22%2F%3E%3Ccircle%20cx%3D%22960%22%20cy%3D%22500%22%20r%3D%22120%22%20fill%3D%22%2300e5ff%22%20fill-opacity%3D%220.08%22%20stroke%3D%22%2300e5ff%22%20stroke-width%3D%223%22%20stroke-opacity%3D%220.35%22%2F%3E%3Cpolygon%20points%3D%22935%2C440%201015%2C500%20935%2C560%22%20fill%3D%22%2300e5ff%22%2F%3E%3Ctext%20x%3D%22960%22%20y%3D%22670%22%20font-family%3D%22system-ui%2C%20sans-serif%22%20font-size%3D%2236%22%20font-weight%3D%22bold%22%20fill%3D%22%23ffffff%22%20text-anchor%3D%22middle%22%20letter-spacing%3D%221%22%3EZK%20VOICE%20HUB%3C%2Ftext%3E%3Ctext%20x%3D%22960%22%20y%3D%22720%22%20font-family%3D%22system-ui%2C%20sans-serif%22%20font-size%3D%2218%22%20font-weight%3D%22600%22%20letter-spacing%3D%224%22%20fill%3D%22%2300e5ff%22%20text-anchor%3D%22middle%22%3EPREMIUM%20HINDI%20DUBBED%20ANIME%3C%2Ftext%3E%3C%2Fsvg%3E`;
+
+export const DEFAULT_FALLBACK_IMAGE = DEFAULT_POSTER_FALLBACK;
 
 // In-memory cache of verified working images to avoid repeated network checks
 const verifiedImageCache = new Set<string>();
@@ -48,7 +56,7 @@ export function isValidImageUrl(rawUrl?: string | null): boolean {
 }
 
 /**
- * Normalizes and resolves raw image URLs into direct image links
+ * Normalizes and resolves raw image URLs into direct CDN image links
  */
 export function resolveImageUrl(rawUrl?: string | null): string {
   if (!isValidImageUrl(rawUrl)) return '';
@@ -81,6 +89,88 @@ export function resolveImageUrl(rawUrl?: string | null): string {
 }
 
 /**
+ * Universal Episode Image Resolver with strict user-specified priority (Requirement 3):
+ * 1. episode.thumbnail
+ * 2. episode.poster
+ * 3. anime.poster
+ */
+export function resolveEpisodeImage(episode?: any, anime?: any): string {
+  if (!episode) return '';
+
+  // Priority 1: episode.thumbnail (thumbnail_url, thumbnailUrl, thumbnail, episode_thumbnail)
+  const thumbCandidates = [
+    episode.thumbnail,
+    episode.thumbnail_url,
+    episode.thumbnailUrl,
+    episode.episode_thumbnail,
+    episode.episodeThumbnail,
+  ];
+  for (const c of thumbCandidates) {
+    if (isValidImageUrl(c)) {
+      const resolved = resolveImageUrl(c);
+      if (resolved && resolved !== DEFAULT_FALLBACK_IMAGE && resolved !== DEFAULT_BANNER_FALLBACK) {
+        return resolved;
+      }
+    }
+  }
+
+  // Priority 2: episode.poster (poster_url, posterUrl, poster, episode_poster)
+  const posterCandidates = [
+    episode.episode_poster,
+    episode.episodePoster,
+    episode.poster,
+    episode.poster_url,
+    episode.posterUrl,
+  ];
+  for (const c of posterCandidates) {
+    if (isValidImageUrl(c)) {
+      const resolved = resolveImageUrl(c);
+      if (resolved && resolved !== DEFAULT_FALLBACK_IMAGE && resolved !== DEFAULT_BANNER_FALLBACK) {
+        return resolved;
+      }
+    }
+  }
+
+  // Priority 3: anime.poster
+  const animeCandidates = [
+    anime?.poster,
+    anime?.poster_url,
+    anime?.posterUrl,
+    episode.anime_poster,
+    episode.anime_poster_url,
+    episode.animePosterUrl,
+    episode.animePoster,
+    anime?.banner_url,
+    anime?.bannerUrl,
+    episode.banner_url,
+    episode.bannerUrl,
+  ];
+  for (const c of animeCandidates) {
+    if (isValidImageUrl(c)) {
+      const resolved = resolveImageUrl(c);
+      if (resolved && resolved !== DEFAULT_FALLBACK_IMAGE && resolved !== DEFAULT_BANNER_FALLBACK) {
+        return resolved;
+      }
+    }
+  }
+
+  return '';
+}
+
+// Hydrate verified image cache from session storage for instant repeat renders
+if (typeof window !== 'undefined') {
+  try {
+    const raw = sessionStorage.getItem('zk_verified_images');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((u: string) => verifiedImageCache.add(u));
+      }
+    }
+  } catch {}
+}
+
+/**
  * Check if image is already verified as working in the current session
  */
 export function isImageVerified(url?: string | null): boolean {
@@ -95,8 +185,14 @@ export function isImageVerified(url?: string | null): boolean {
 export function markImageVerified(url?: string | null): void {
   if (!url) return;
   const clean = resolveImageUrl(url);
-  if (clean) {
+  if (clean && !verifiedImageCache.has(clean)) {
     verifiedImageCache.add(clean);
+    if (typeof window !== 'undefined') {
+      try {
+        const arr = Array.from(verifiedImageCache).slice(-200);
+        sessionStorage.setItem('zk_verified_images', JSON.stringify(arr));
+      } catch {}
+    }
   }
 }
 

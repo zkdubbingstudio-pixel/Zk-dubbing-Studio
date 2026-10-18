@@ -18,6 +18,7 @@ import { supabase } from '../lib/supabase';
 import { getCachedData } from '../lib/cache';
 import { useAuthStore } from '../store/authStore';
 import SmartImage from '../components/SmartImage';
+import { resolveEpisodeImage } from '../lib/imageUtils';
 
 function isDirectVideo(url: string): boolean {
   if (!url) return false;
@@ -54,9 +55,28 @@ export default function WatchPage() {
   const paramAnimeId = (routeAnimeId && routeAnimeId !== 'undefined' && routeAnimeId !== 'null') ? routeAnimeId : undefined;
   const paramSeasonId = (routeSeasonId && routeSeasonId !== 'undefined' && routeSeasonId !== 'null') ? routeSeasonId : undefined;
 
-  // Instant pre-population from route state or cache so video begins playing immediately
-  const initialEp = (location.state as any)?.episode || (paramId ? getCachedData<any>(`episode_${paramId}`) : null);
-  const initialAnime = (location.state as any)?.anime || (paramAnimeId ? getCachedData<any>(`anime_${paramAnimeId}`) : null);
+  // Instant pre-population from route state, episode cache, or catalog so video begins playing immediately
+  const initialEp = useMemo(() => {
+    if ((location.state as any)?.episode) return (location.state as any).episode;
+    if (paramId) {
+      const fromEpKey = getCachedData<any>(`episode_${paramId}`);
+      if (fromEpKey) return fromEpKey;
+      const allEps = getCachedData<any[]>('all_episodes');
+      if (allEps) {
+        const matched = allEps.find(e => e.id === paramId || String(e.episodeNumber) === String(paramId));
+        if (matched) return matched;
+      }
+    }
+    return null;
+  }, [paramId, location.state]);
+
+  const initialAnime = useMemo(() => {
+    if ((location.state as any)?.anime) return (location.state as any).anime;
+    if (paramAnimeId) {
+      return getCachedData<any>(`anime_${paramAnimeId}`);
+    }
+    return null;
+  }, [paramAnimeId, location.state]);
 
   const [episode, setEpisode] = useState<any>(initialEp);
   const [anime, setAnime] = useState<any>(initialAnime);
@@ -191,6 +211,13 @@ export default function WatchPage() {
             setLoading(false);
           }
           return;
+        }
+
+        // FAST START: Mount and begin playback immediately without waiting for background anime details
+        if (isMounted) {
+          setEpisode(epData);
+          setLoading(false);
+          setError(null);
         }
 
         let fetchedSeasons: any[] = [];
@@ -594,7 +621,7 @@ export default function WatchPage() {
                     controls
                     autoPlay
                     playsInline
-                    preload="auto"
+                    preload="metadata"
                     className="w-full h-full object-contain bg-black relative z-10"
                     onError={() => {
                       if (effectiveServer) {
@@ -803,9 +830,10 @@ export default function WatchPage() {
                 >
                   <div className="relative w-full aspect-video bg-black/50 overflow-hidden">
                     <SmartImage 
-                      src={anime?.poster_url || anime?.posterUrl || ep.thumbnail_url || ep.thumbnailUrl || anime?.banner_url || anime?.bannerUrl || ""} 
+                      src={resolveEpisodeImage(ep, anime)}
+                      fallbackUrl={anime?.poster_url || anime?.posterUrl || ''}
                       alt={ep.title || `Episode ${ep.episodeNumber}`} 
-                      type="poster"
+                      type="thumbnail"
                       loading="lazy"
                       className={`w-full h-full transition-transform duration-500 opacity-90 group-hover:scale-105 group-hover:opacity-100 ${isCurrent ? 'opacity-100 scale-105' : ''}`} 
                       style={{ objectFit: 'cover', objectPosition: 'center center' }}

@@ -1,7 +1,8 @@
-import React, { useState, useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Play, Sparkles, Star } from 'lucide-react';
 import SmartImage from './SmartImage';
+import { resolveEpisodeImage } from '../lib/imageUtils';
 
 interface AnimeCard3DProps {
   key?: React.Key;
@@ -13,6 +14,7 @@ interface AnimeCard3DProps {
   className?: string;
   aspectRatio?: 'poster' | 'video';
   customPlayLink?: string;
+  priority?: boolean;
 }
 
 const AnimeCard3D = React.memo(function AnimeCard3D({
@@ -24,49 +26,90 @@ const AnimeCard3D = React.memo(function AnimeCard3D({
   className = '',
   aspectRatio = 'poster',
   customPlayLink,
+  priority = false,
 }: AnimeCard3DProps) {
-  const [rot, setRot] = useState({ x: 0, y: 0 });
-  const [glare, setGlare] = useState({ x: 50, y: 50, opacity: 0 });
-  const [isHovered, setIsHovered] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const glareRef = useRef<HTMLDivElement>(null);
+  const playOverlayRef = useRef<HTMLDivElement>(null);
+  const rafId = useRef<number | null>(null);
+
+  // Check if pointer supports fine hover (desktop)
+  const isFinePointer = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!cardRef.current) return;
-    const rect = cardRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
+    if (!isFinePointer || !containerRef.current) return;
+    if (rafId.current) return; // Throttle to browser refresh rate
 
-    // Smooth tilt: max 12 deg
-    const rotX = -((y - centerY) / centerY) * 12;
-    const rotY = ((x - centerX) / centerX) * 12;
+    const clientX = e.clientX;
+    const clientY = e.clientY;
 
-    setRot({ x: rotX, y: rotY });
-    setGlare({
-      x: (x / rect.width) * 100,
-      y: (y / rect.height) * 100,
-      opacity: 0.35,
+    rafId.current = requestAnimationFrame(() => {
+      rafId.current = null;
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      const centerX = rect.width / 2;
+      const centerY = rect.height / 2;
+
+      // Smooth tilt: max 8 deg to prevent composite layer thrashing
+      const rotX = -((y - centerY) / centerY) * 8;
+      const rotY = ((x - centerX) / centerX) * 8;
+
+      containerRef.current.style.transform = `perspective(1000px) rotateX(${rotX.toFixed(2)}deg) rotateY(${rotY.toFixed(2)}deg) scale3d(1.03, 1.03, 1) translateZ(0)`;
+
+      if (glareRef.current) {
+        const gx = ((x / rect.width) * 100).toFixed(1);
+        const gy = ((y / rect.height) * 100).toFixed(1);
+        glareRef.current.style.background = `radial-gradient(circle at ${gx}% ${gy}%, rgba(255, 255, 255, 0.25), transparent 60%)`;
+      }
     });
   };
 
-  const handleMouseLeave = () => {
-    setRot({ x: 0, y: 0 });
-    setGlare(prev => ({ ...prev, opacity: 0 }));
-    setIsHovered(false);
+  const handleMouseEnter = () => {
+    if (!isFinePointer || !containerRef.current) return;
+    containerRef.current.style.willChange = 'transform';
+    containerRef.current.style.transform = `perspective(1000px) scale3d(1.03, 1.03, 1) translateZ(0)`;
+    if (playOverlayRef.current) {
+      playOverlayRef.current.style.opacity = '1';
+      playOverlayRef.current.style.transform = 'translateZ(30px) scale(1)';
+    }
   };
 
-  // Requirement 2: Use anime.poster_url for New Drops, Trending, Popular Today, Browse, Search, Episode cards
-  // Requirement 3: Never use placeholder or empty image when a valid URL exists
-  const posterImg =
-    anime.poster_url ||
-    anime.posterUrl ||
-    (aspectRatio === 'video' ? (anime.thumbnail_url || anime.thumbnailUrl) : '') ||
-    anime.banner_url ||
-    anime.bannerUrl ||
-    anime.thumbnail_url ||
-    anime.thumbnailUrl ||
-    '';
+  const handleMouseLeave = () => {
+    if (rafId.current) {
+      cancelAnimationFrame(rafId.current);
+      rafId.current = null;
+    }
+    if (containerRef.current) {
+      containerRef.current.style.willChange = 'auto';
+      containerRef.current.style.transform = 'perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1) translateZ(0)';
+    }
+    if (glareRef.current) {
+      glareRef.current.style.background = 'none';
+    }
+    if (playOverlayRef.current) {
+      playOverlayRef.current.style.opacity = '0';
+      playOverlayRef.current.style.transform = 'translateZ(10px) scale(0.7)';
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (rafId.current) cancelAnimationFrame(rafId.current);
+    };
+  }, []);
+
+  // Priority for video/episode cards: episode.thumbnail -> episode.poster -> anime.poster (Requirement 3)
+  // For standard anime cards: anime.poster -> anime.banner (Requirement 2)
+  const posterImg = aspectRatio === 'video'
+    ? resolveEpisodeImage(anime, anime)
+    : (anime.poster_url || anime.posterUrl || anime.poster || anime.banner_url || anime.bannerUrl || '');
+
+  const fallbackImg = aspectRatio === 'video'
+    ? (anime.poster_url || anime.posterUrl || anime.poster || '')
+    : (anime.banner_url || anime.bannerUrl || '');
 
   const title = anime.animeTitle || anime.title || anime.episodeTitle || 'Untitled Anime';
   const isMovie = Boolean(anime.type === 'Movie' || anime.contentType === 'Movie' || anime.isMovie);
@@ -86,8 +129,9 @@ const AnimeCard3D = React.memo(function AnimeCard3D({
   return (
     <div
       ref={cardRef}
-      className={`relative perspective-1000 group flex flex-col h-full ${className}`}
-      onMouseEnter={() => setIsHovered(true)}
+      className={`relative perspective-1000 group flex flex-col h-full select-none ${className}`}
+      style={{ contentVisibility: 'auto', containIntrinsicSize: '200px 320px' }}
+      onMouseEnter={handleMouseEnter}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
     >
@@ -96,49 +140,54 @@ const AnimeCard3D = React.memo(function AnimeCard3D({
         state={{ anime: { ...anime, id: targetAnimeId } }}
         className="block w-full h-full outline-none focus:ring-2 focus:ring-brand rounded-2xl flex flex-col"
       >
-        {/* 3D Container with physical tilt */}
+        {/* 3D Container with GPU-accelerated physical tilt */}
         <div
+          ref={containerRef}
           className="relative preserve-3d transition-transform duration-200 ease-out rounded-2xl overflow-hidden glass-cyber-card border border-white/10 group-hover:border-[#00e5ff]/60 shadow-[0_10px_30px_rgba(0,0,0,0.8)] group-hover:shadow-[0_20px_40px_rgba(0,229,255,0.25)] flex flex-col h-full w-full"
           style={{
-            transform: `perspective(1000px) rotateX(${rot.x}deg) rotateY(${rot.y}deg) scale3d(${
-              isHovered ? 1.04 : 1
-            }, ${isHovered ? 1.04 : 1}, 1)`,
+            transform: 'perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1) translateZ(0)',
+            WebkitMaskImage: '-webkit-radial-gradient(white, black)',
+            isolation: 'isolate',
           }}
         >
           {/* Animated Neon Rim Glow on Hover */}
           <div
-            className={`absolute -inset-1 rounded-2xl bg-gradient-to-r from-[#00e5ff] via-[#cbd5e1] to-[#00b4d8] opacity-0 group-hover:opacity-40 blur-sm transition-opacity duration-500 pointer-events-none`}
+            className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-[#00e5ff] via-[#cbd5e1] to-[#00b4d8] opacity-0 group-hover:opacity-40 blur-sm transition-opacity duration-300 pointer-events-none"
           />
 
-          {/* Aspect Ratio Poster Wrapper (Requirements 2, 6, 9) */}
+          {/* Aspect Ratio Poster Wrapper: 2:3 for anime posters, 16:9 for episode video cards (Requirements 2 & 3) */}
           <div
             className={`relative w-full ${
               aspectRatio === 'video' ? 'aspect-[16/9]' : 'aspect-[2/3]'
-            } overflow-hidden bg-[#0a0e17] shrink-0`}
+            } overflow-hidden bg-[#0a0e17] shrink-0 rounded-t-2xl`}
+            style={{
+              WebkitMaskImage: '-webkit-radial-gradient(white, black)',
+              isolation: 'isolate',
+            }}
           >
             <SmartImage
               src={posterImg}
+              fallbackUrl={fallbackImg}
               alt={title}
-              type="poster"
-              loading="lazy"
+              type={aspectRatio === 'video' ? 'thumbnail' : 'poster'}
+              loading={priority ? 'eager' : 'lazy'}
+              priority={priority}
               titleFallback={title}
-              className="w-full h-full transition-transform duration-700 ease-out group-hover:scale-105 opacity-95 group-hover:opacity-100"
+              className="w-full h-full transition-transform duration-500 ease-out group-hover:scale-105 opacity-95 group-hover:opacity-100"
               style={{ objectFit: 'cover', objectPosition: 'center center' }}
             />
 
             {/* Cinematic Gradient Overlays */}
             <div className="absolute inset-0 bg-gradient-to-t from-[#05070b] via-[#05070b]/30 to-transparent opacity-80 group-hover:opacity-60 transition-opacity duration-300 pointer-events-none" />
-            <div className="absolute inset-0 bg-gradient-to-tr from-[#00e5ff]/10 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+            <div className="absolute inset-0 bg-gradient-to-tr from-[#00e5ff]/10 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
 
-            {/* Dynamic 3D Glare Light Reflection */}
+            {/* Dynamic 3D Glare Light Reflection (direct DOM for 60 FPS) */}
             <div
+              ref={glareRef}
               className="absolute inset-0 pointer-events-none transition-opacity duration-300"
-              style={{
-                background: `radial-gradient(circle at ${glare.x}% ${glare.y}%, rgba(255, 255, 255, ${glare.opacity}), transparent 60%)`,
-              }}
             />
 
-            {/* Trending Ranking Number (Vertically Centered on Left Edge of Poster) */}
+            {/* Trending Ranking Number */}
             {rank !== undefined && (
               <div
                 className="absolute left-2 sm:left-3 top-1/2 -translate-y-1/2 pointer-events-none select-none z-10 flex items-center justify-start"
@@ -154,8 +203,7 @@ const AnimeCard3D = React.memo(function AnimeCard3D({
 
             {/* Top Left Badge (Season / Movie Status) */}
             <div
-              className="absolute top-2.5 left-2.5 z-20 transition-transform duration-300"
-              style={{ transform: isHovered ? 'translateZ(25px)' : 'translateZ(0px)' }}
+              className="absolute top-2.5 left-2.5 z-20 transition-transform duration-300 group-hover:translate-z-[25px]"
             >
               <span className={`inline-flex items-center gap-1 ${
                 isMovie
@@ -169,8 +217,7 @@ const AnimeCard3D = React.memo(function AnimeCard3D({
 
             {/* Top Right Badge (Audio / Hindi Dub / Quality) */}
             <div
-              className="absolute top-2.5 right-2.5 z-20 transition-transform duration-300"
-              style={{ transform: isHovered ? 'translateZ(25px)' : 'translateZ(0px)' }}
+              className="absolute top-2.5 right-2.5 z-20 transition-transform duration-300 group-hover:translate-z-[25px]"
             >
               {badgeTopRight ? (
                 <span className="bg-[#00e5ff] text-black text-[10px] sm:text-xs font-extrabold px-2.5 py-0.5 rounded-md shadow-[0_0_12px_rgba(0,229,255,0.6)]">
@@ -186,8 +233,7 @@ const AnimeCard3D = React.memo(function AnimeCard3D({
             {/* Bottom Left Badge (Episode Count / Range) */}
             {badgeBottomLeft && (
               <div
-                className="absolute bottom-2.5 left-2.5 z-20 transition-transform duration-300"
-                style={{ transform: isHovered ? 'translateZ(20px)' : 'translateZ(0px)' }}
+                className="absolute bottom-2.5 left-2.5 z-20 transition-transform duration-300 group-hover:translate-z-[20px]"
               >
                 <span className="bg-black/80 backdrop-blur-md text-silver-light text-[10px] sm:text-xs font-semibold px-2 py-0.5 rounded border border-white/10">
                   {badgeBottomLeft}
@@ -198,8 +244,7 @@ const AnimeCard3D = React.memo(function AnimeCard3D({
             {/* Rating Tag if available */}
             {anime.rating && (
               <div
-                className="absolute bottom-2.5 right-2.5 z-20 transition-transform duration-300"
-                style={{ transform: isHovered ? 'translateZ(20px)' : 'translateZ(0px)' }}
+                className="absolute bottom-2.5 right-2.5 z-20 transition-transform duration-300 group-hover:translate-z-[20px]"
               >
                 <span className="inline-flex items-center gap-1 bg-black/80 backdrop-blur text-yellow-400 text-[10px] font-bold px-2 py-0.5 rounded border border-yellow-500/20">
                   <Star className="w-2.5 h-2.5 fill-yellow-400" />
@@ -208,12 +253,12 @@ const AnimeCard3D = React.memo(function AnimeCard3D({
               </div>
             )}
 
-            {/* 3D Play Button Overlay hovering in physical space */}
+            {/* 3D Play Button Overlay */}
             <div
-              className="absolute inset-0 flex items-center justify-center pointer-events-none transition-all duration-300 ease-out z-30"
+              ref={playOverlayRef}
+              className="absolute inset-0 flex items-center justify-center pointer-events-none transition-all duration-300 ease-out z-30 opacity-0"
               style={{
-                transform: isHovered ? 'translateZ(40px) scale(1)' : 'translateZ(10px) scale(0.7)',
-                opacity: isHovered ? 1 : 0,
+                transform: 'translateZ(10px) scale(0.7)',
               }}
             >
               <div className="w-13 h-13 sm:w-14 sm:h-14 rounded-full bg-gradient-to-tr from-[#00b4d8] to-[#00f0ff] flex items-center justify-center text-black shadow-[0_0_30px_rgba(0,229,255,0.8),inset_0_1px_2px_rgba(255,255,255,0.8)] border border-white/40">
@@ -225,7 +270,7 @@ const AnimeCard3D = React.memo(function AnimeCard3D({
           {/* Bottom Content Area */}
           <div className="p-3 sm:p-3.5 bg-gradient-to-b from-[#0a0e17]/80 to-[#05070b]/95 backdrop-blur-md border-t border-white/5 flex-1 flex flex-col justify-between">
             <div>
-              <h3 className="font-bold text-silver-light text-xs sm:text-sm md:text-base leading-snug line-clamp-1 group-hover:text-brand transition-colors duration-300">
+              <h3 className="font-bold text-silver-light text-xs sm:text-sm md:text-base leading-snug line-clamp-1 group-hover:text-brand transition-colors duration-200">
                 {title}
               </h3>
               {aspectRatio === 'video' && anime.episodeTitle && anime.episodeTitle !== title && (

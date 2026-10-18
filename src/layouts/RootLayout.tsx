@@ -36,8 +36,13 @@ export default function RootLayout() {
   }, [authSuccessMessage, setAuthSuccessMessage]);
 
   useEffect(() => {
+    let last = false;
     const handleScroll = () => {
-      setIsScrolled(window.scrollY > 20);
+      const scrolled = window.scrollY > 20;
+      if (scrolled !== last) {
+        last = scrolled;
+        setIsScrolled(scrolled);
+      }
     };
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);

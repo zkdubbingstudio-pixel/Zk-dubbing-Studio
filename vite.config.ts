@@ -32,15 +32,21 @@ export default defineConfig(() => {
       pure: process.env.NODE_ENV === 'production' ? ['console.log', 'console.debug', 'console.info'] : [],
     },
     build: {
+      target: 'esnext',
+      minify: 'esbuild',
+      cssMinify: true,
+      sourcemap: false,
       rollupOptions: {
         output: {
           manualChunks(id) {
             if (id.includes('node_modules')) {
+              if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/react-router/') || id.includes('scheduler')) return 'vendor-react';
               if (id.includes('firebase')) return 'vendor-firebase';
               if (id.includes('@supabase')) return 'vendor-supabase';
               if (id.includes('recharts') || id.includes('d3-')) return 'vendor-recharts';
               if (id.includes('lucide-react')) return 'vendor-icons';
               if (id.includes('@aws-sdk')) return 'vendor-aws';
+              if (id.includes('browser-image-compression')) return 'vendor-compression';
             }
           },
         },

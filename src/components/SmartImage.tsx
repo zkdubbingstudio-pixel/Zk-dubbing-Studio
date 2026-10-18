@@ -4,8 +4,11 @@ import {
   isValidImageUrl, 
   getAlternativeImageCandidates,
   markImageVerified,
-  isImageVerified
+  isImageVerified,
+  DEFAULT_POSTER_FALLBACK,
+  DEFAULT_BANNER_FALLBACK
 } from '../lib/imageUtils';
+import { observeImageIntersection, preloadLCPImage } from '../lib/imageObserver';
 
 export interface SmartImageProps {
   src?: string | null;
@@ -14,106 +17,210 @@ export interface SmartImageProps {
   className?: string;
   style?: React.CSSProperties;
   loading?: 'lazy' | 'eager';
+  priority?: boolean; // Critical LCP candidate (loads immediately, bypasses observer, sets fetchPriority="high")
   titleFallback?: string;
+  fallbackUrl?: string; // Optional secondary fallback URL before showing vector SVG
+  placeholder?: 'shimmer' | 'blur' | 'none';
   onLoad?: () => void;
   onError?: () => void;
 }
 
-// Crisp cyberpunk vector fallback anime artwork SVG when image loading fails after retries
-export const DEFAULT_FALLBACK_IMAGE = `data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%22600%22%20height%3D%22900%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20600%20900%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22bg%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%23080c14%22%2F%3E%3Cstop%20offset%3D%2250%25%22%20stop-color%3D%22%230e1726%22%2F%3E%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%2305070b%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20fill%3D%22url(%23bg)%22%2F%3E%3Ccircle%20cx%3D%22300%22%20cy%3D%22420%22%20r%3D%2270%22%20fill%3D%22%2300e5ff%22%20fill-opacity%3D%220.1%22%20stroke%3D%22%2300e5ff%22%20stroke-width%3D%222%22%20stroke-opacity%3D%220.4%22%2F%3E%3Cpolygon%20points%3D%22285%2C385%20335%2C420%20285%2C455%22%20fill%3D%22%2300e5ff%22%2F%3E%3Ctext%20x%3D%22300%22%20y%3D%22530%22%20font-family%3D%22system-ui%2C%20sans-serif%22%20font-size%3D%2220%22%20font-weight%3D%22bold%22%20fill%3D%22%23ffffff%22%20text-anchor%3D%22middle%22%3EZK%20VOICE%20HUB%3C%2Ftext%3E%3Ctext%20x%3D%22300%22%20y%3D%22560%22%20font-family%3D%22system-ui%2C%20sans-serif%22%20font-size%3D%2212%22%20font-weight%3D%22600%22%20letter-spacing%3D%222%22%20fill%3D%22%2300e5ff%22%20text-anchor%3D%22middle%22%3EHINDI%20DUBBED%20ANIME%3C%2Ftext%3E%3C%2Fsvg%3E`;
+// 1x1 transparent SVG data URI to avoid broken image icons while awaiting viewport intersection
+const TRANSPARENT_PLACEHOLDER = 'data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%221%22%20height%3D%221%22%20viewBox%3D%220%200%201%201%22%3E%3C%2Fsvg%3E';
 
 const SmartImage = React.memo(function SmartImage({
   src,
   alt = 'Anime Artwork',
+  type = 'poster',
   className = '',
   style = {},
   loading = 'lazy',
+  priority = false,
+  fallbackUrl,
+  placeholder = 'shimmer',
   onLoad,
   onError,
 }: SmartImageProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const defaultFallback = type === 'poster' ? DEFAULT_POSTER_FALLBACK : DEFAULT_BANNER_FALLBACK;
   const initialResolved = resolveImageUrl(src);
   const isValid = isValidImageUrl(src);
+  const alreadyVerified = isImageVerified(src);
+
+  // High priority if explicitly requested or loading="eager"
+  const isHighPriority = priority || loading === 'eager';
+
+  // Intersection Observer viewport gating:
+  // - High priority or eager images immediately load (optimizing LCP)
+  // - Images already verified in current session immediately render
+  // - Off-screen images defer until 250px from visible viewport
+  const [isInView, setIsInView] = useState<boolean>(() => {
+    if (isHighPriority) return true;
+    if (alreadyVerified) return true;
+    if (typeof window === 'undefined' || typeof IntersectionObserver === 'undefined') return true;
+    return false;
+  });
 
   const [currentSrc, setCurrentSrc] = useState<string>(
-    isValid && initialResolved ? initialResolved : DEFAULT_FALLBACK_IMAGE
+    isValid && initialResolved ? initialResolved : (resolveImageUrl(fallbackUrl) || defaultFallback)
   );
   const [retryCount, setRetryCount] = useState<number>(0);
-  const [isLoaded, setIsLoaded] = useState<boolean>(isImageVerified(src));
+  const [triedFallbackUrl, setTriedFallbackUrl] = useState<boolean>(false);
+  const [isLoaded, setIsLoaded] = useState<boolean>(alreadyVerified);
+  const [hasFailed, setHasFailed] = useState<boolean>(!isValid);
   const retryTimeoutRef = useRef<any>(null);
 
-  // Sync state if src changes
+  // Preload critical LCP candidate as soon as component mounts
+  useEffect(() => {
+    if (isHighPriority && initialResolved) {
+      preloadLCPImage(initialResolved);
+    }
+  }, [isHighPriority, initialResolved]);
+
+  // Progressive Viewport Intersection Observer:
+  // Attaches singleton observer to container; defers off-screen image fetching
+  useEffect(() => {
+    if (isInView) return;
+    const el = containerRef.current;
+    if (!el) return;
+
+    const unobserve = observeImageIntersection(el, () => {
+      setIsInView(true);
+    });
+
+    return () => {
+      unobserve();
+    };
+  }, [isInView]);
+
+  // Sync state if src or fallbackUrl changes
   useEffect(() => {
     if (retryTimeoutRef.current) {
       clearTimeout(retryTimeoutRef.current);
     }
     const nextUrl = resolveImageUrl(src);
     if (!isValidImageUrl(src) || !nextUrl) {
-      setCurrentSrc(DEFAULT_FALLBACK_IMAGE);
-      setRetryCount(0);
-      setIsLoaded(true);
+      const secondary = resolveImageUrl(fallbackUrl);
+      if (secondary && isValidImageUrl(secondary)) {
+        setCurrentSrc(secondary);
+        setRetryCount(0);
+        setTriedFallbackUrl(true);
+        setIsLoaded(isImageVerified(secondary));
+        setHasFailed(false);
+      } else {
+        setCurrentSrc(defaultFallback);
+        setRetryCount(0);
+        setIsLoaded(true);
+        setHasFailed(true);
+      }
       return;
     }
 
     setCurrentSrc(nextUrl);
     setRetryCount(0);
+    setTriedFallbackUrl(false);
+    setHasFailed(false);
     setIsLoaded(isImageVerified(nextUrl));
+
+    if (isHighPriority) {
+      preloadLCPImage(nextUrl);
+    }
 
     return () => {
       if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
     };
-  }, [src]);
+  }, [src, fallbackUrl, defaultFallback, isHighPriority]);
 
   // Handle browser load error with automatic retries before falling back
   const handleImageError = () => {
-    if (currentSrc === DEFAULT_FALLBACK_IMAGE) return;
-
-    // Retry up to 2 times automatically before switching to fallback image
-    if (retryCount < 2) {
+    // 1. Retry primary URL up to 2 times automatically with mirrors or cache-busters
+    if (retryCount < 2 && !triedFallbackUrl) {
       const nextAttempt = retryCount + 1;
       setRetryCount(nextAttempt);
       const baseOriginal = resolveImageUrl(src) || currentSrc;
       const retryUrl = getAlternativeImageCandidates(baseOriginal, nextAttempt);
 
-      // Brief delay before retrying with backoff
       retryTimeoutRef.current = setTimeout(() => {
         setCurrentSrc(retryUrl);
-      }, 250 * nextAttempt);
+      }, 200 * nextAttempt);
       return;
     }
 
-    // Show fallback image ONLY after all automatic retries fail
-    setCurrentSrc(DEFAULT_FALLBACK_IMAGE);
+    // 2. Try explicit secondary fallback if provided (e.g. poster for banner or banner for poster)
+    if (fallbackUrl && !triedFallbackUrl) {
+      const secondary = resolveImageUrl(fallbackUrl);
+      if (secondary && isValidImageUrl(secondary) && secondary !== currentSrc) {
+        setTriedFallbackUrl(true);
+        setRetryCount(0);
+        setCurrentSrc(secondary);
+        return;
+      }
+    }
+
+    // 3. Show crisp vector fallback image ONLY after all automatic retries fail
+    setCurrentSrc(defaultFallback);
     setIsLoaded(true);
+    setHasFailed(true);
     if (onError) onError();
   };
 
   const handleImageLoad = () => {
     setIsLoaded(true);
+    setHasFailed(false);
     if (src) {
       markImageVerified(src);
     }
-    if (currentSrc && currentSrc !== DEFAULT_FALLBACK_IMAGE) {
+    if (currentSrc && currentSrc !== defaultFallback) {
       markImageVerified(currentSrc);
     }
     if (onLoad) onLoad();
   };
 
+  // Determine actual image source to render:
+  // If not in view yet, use transparent placeholder so 0 HTTP requests are triggered
+  const effectiveSrc = isInView ? currentSrc : TRANSPARENT_PLACEHOLDER;
+
   return (
-    <img
-      src={currentSrc}
-      alt={alt}
-      loading={loading}
-      decoding="async"
-      referrerPolicy="no-referrer"
-      onError={handleImageError}
-      onLoad={handleImageLoad}
-      className={`${className} ${!isLoaded && currentSrc !== DEFAULT_FALLBACK_IMAGE ? 'opacity-90' : 'opacity-100'} transition-opacity duration-300`}
+    <div 
+      ref={containerRef}
+      className="relative w-full h-full overflow-hidden"
       style={{
-        objectFit: 'cover',
-        objectPosition: 'center',
-        ...style,
+        WebkitMaskImage: '-webkit-radial-gradient(white, black)',
+        isolation: 'isolate',
       }}
-    />
+    >
+      {/* High-tech Shimmering Skeleton Loader while awaiting intersection or loading (0 Cumulative Layout Shift) */}
+      {placeholder !== 'none' && !isLoaded && !hasFailed && (
+        <div 
+          aria-hidden="true"
+          className="absolute inset-0 bg-[#0a0f19] z-0 overflow-hidden pointer-events-none"
+        >
+          <div className="absolute inset-0 skeleton-shimmer opacity-80" />
+        </div>
+      )}
+
+      {/* Actual Image Element with Progressive Fade-in */}
+      <img
+        src={effectiveSrc}
+        alt={alt}
+        loading={isHighPriority ? 'eager' : 'lazy'}
+        decoding={isHighPriority ? 'sync' : 'async'}
+        fetchPriority={isHighPriority ? 'high' : 'auto'}
+        referrerPolicy="no-referrer"
+        onError={handleImageError}
+        onLoad={handleImageLoad}
+        className={`${className} relative z-10 w-full h-full transition-opacity duration-300 ${
+          (!isLoaded || !isInView) && currentSrc !== defaultFallback 
+            ? 'opacity-0' 
+            : 'opacity-100'
+        }`}
+        style={{
+          objectFit: 'cover',
+          objectPosition: 'center center',
+          ...style,
+        }}
+      />
+    </div>
   );
 });
 

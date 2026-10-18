@@ -8,51 +8,57 @@ interface Particle {
   vx: number;
   vy: number;
   alpha: number;
-  glow: number;
 }
 
 export default function CyberParticles() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
+    // Mobile optimization: Skip canvas animation completely on touch/mobile devices to guarantee 60 FPS
+    if (typeof window === 'undefined') return;
+    const isMobile = window.innerWidth < 768 || ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+    if (isMobile) return;
+
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) return;
 
     let animationFrameId: number;
     let width = (canvas.width = window.innerWidth);
     let height = (canvas.height = window.innerHeight);
 
+    let resizeTimer: any;
     const handleResize = () => {
-      if (!canvas) return;
-      width = canvas.width = window.innerWidth;
-      height = canvas.height = window.innerHeight;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        if (!canvas) return;
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+      }, 150);
     };
 
-    window.addEventListener('resize', handleResize);
+    window.addEventListener('resize', handleResize, { passive: true });
 
-    // Keep particle count modest for extreme 60fps performance
-    const count = Math.min(width < 768 ? 24 : 45, 50);
+    // Modest particle count for desktop 60fps
+    const count = 30;
     const particles: Particle[] = [];
 
     const colors = [
-      'rgba(0, 229, 255,',   // Electric Blue
+      'rgba(0, 229, 255,',   // Electric Cyan
       'rgba(51, 235, 255,',  // Bright Cyan
       'rgba(203, 213, 225,', // Silver
-      'rgba(0, 119, 182,',   // Deep Ocean Cyan
     ];
 
     for (let i = 0; i < count; i++) {
       particles.push({
         x: Math.random() * width,
         y: Math.random() * height,
-        radius: Math.random() * 1.8 + 0.8,
+        radius: Math.random() * 1.5 + 0.6,
         color: colors[Math.floor(Math.random() * colors.length)],
-        vx: (Math.random() - 0.5) * 0.35,
-        vy: -Math.random() * 0.45 - 0.1, // gently float upward
-        alpha: Math.random() * 0.6 + 0.2,
-        glow: Math.random() * 8 + 4,
+        vx: (Math.random() - 0.5) * 0.25,
+        vy: -Math.random() * 0.35 - 0.08, // float upward
+        alpha: Math.random() * 0.5 + 0.2,
       });
     }
 
@@ -62,35 +68,47 @@ export default function CyberParticles() {
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
+    // Pause rendering while user is actively scrolling to prevent frame drops
+    let isScrolling = false;
+    let scrollStopTimer: any = null;
+    const handleScroll = () => {
+      isScrolling = true;
+      if (scrollStopTimer) clearTimeout(scrollStopTimer);
+      scrollStopTimer = setTimeout(() => {
+        isScrolling = false;
+      }, 100);
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+
     const render = () => {
-      if (!isVisible) {
+      if (!isVisible || isScrolling) {
         animationFrameId = requestAnimationFrame(render);
         return;
       }
 
       ctx.clearRect(0, 0, width, height);
 
-      // Draw subtle grid energy / scanlines effect at top if needed
       for (let i = 0; i < particles.length; i++) {
         const p = particles[i];
         p.x += p.vx;
         p.y += p.vy;
 
-        // Wrap around boundaries
         if (p.x < 0) p.x = width;
         if (p.x > width) p.x = 0;
         if (p.y < 0) p.y = height;
         if (p.y > height) p.y = 0;
 
-        // Draw glowing particle
-        ctx.save();
+        // Outer soft halo (fast 2-circle technique, zero expensive shadowBlur)
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius * 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = `${p.color} ${p.alpha * 0.25})`;
+        ctx.fill();
+
+        // Inner solid core
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
         ctx.fillStyle = `${p.color} ${p.alpha})`;
-        ctx.shadowColor = 'rgba(0, 229, 255, 0.8)';
-        ctx.shadowBlur = p.glow;
         ctx.fill();
-        ctx.restore();
       }
 
       animationFrameId = requestAnimationFrame(render);
@@ -100,7 +118,10 @@ export default function CyberParticles() {
 
     return () => {
       cancelAnimationFrame(animationFrameId);
+      clearTimeout(resizeTimer);
+      clearTimeout(scrollStopTimer);
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('scroll', handleScroll);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
@@ -108,8 +129,8 @@ export default function CyberParticles() {
   return (
     <canvas
       ref={canvasRef}
-      className="pointer-events-none fixed inset-0 z-0 opacity-40 mix-blend-screen"
-      aria-hidden="true"
+      className="fixed inset-0 pointer-events-none z-0 hidden md:block opacity-60"
+      style={{ willChange: 'transform' }}
     />
   );
 }

@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS public.episodes (
     season_number INTEGER DEFAULT 1,
     episode_number INTEGER NOT NULL DEFAULT 1,
     episode_title TEXT,
+    title TEXT,
     description TEXT,
     thumbnail_url TEXT,
     duration TEXT,
@@ -103,6 +104,9 @@ CREATE TABLE IF NOT EXISTS public.episodes (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE public.episodes ADD COLUMN IF NOT EXISTS title TEXT;
+ALTER TABLE public.episodes ADD COLUMN IF NOT EXISTS episode_title TEXT;
 
 DROP TRIGGER IF EXISTS trigger_episodes_updated_at ON public.episodes;
 CREATE TRIGGER trigger_episodes_updated_at
@@ -213,6 +217,9 @@ CREATE INDEX IF NOT EXISTS idx_anime_trending ON public.anime(trending) WHERE tr
 CREATE INDEX IF NOT EXISTS idx_anime_type ON public.anime(type);
 CREATE INDEX IF NOT EXISTS idx_anime_created_at ON public.anime(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_anime_views ON public.anime(views DESC);
+CREATE INDEX IF NOT EXISTS idx_anime_rating ON public.anime(rating DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_anime_perf_catalog ON public.anime(created_at DESC, id, title);
+CREATE INDEX IF NOT EXISTS idx_anime_genres_gin ON public.anime USING GIN(genres);
 
 CREATE INDEX IF NOT EXISTS idx_seasons_anime_id ON public.seasons(anime_id);
 CREATE INDEX IF NOT EXISTS idx_seasons_order ON public.seasons(anime_id, season_number ASC);
@@ -221,6 +228,8 @@ CREATE INDEX IF NOT EXISTS idx_episodes_anime_id ON public.episodes(anime_id);
 CREATE INDEX IF NOT EXISTS idx_episodes_season_id ON public.episodes(season_id);
 CREATE INDEX IF NOT EXISTS idx_episodes_created_at ON public.episodes(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_episodes_order ON public.episodes(anime_id, season_number, episode_number ASC);
+CREATE INDEX IF NOT EXISTS idx_episodes_perf_lookup ON public.episodes(anime_id, season_id, episode_number ASC);
+CREATE INDEX IF NOT EXISTS idx_episodes_published_created ON public.episodes(published, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_progress_user ON public.user_progress(user_id);
 CREATE INDEX IF NOT EXISTS idx_favorites_user ON public.favorites(user_id);

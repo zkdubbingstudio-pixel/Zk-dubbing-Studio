@@ -11,11 +11,20 @@
       ]
     },
     {
-      "source": "/(.*\\.(?:ico|png|jpg|jpeg|svg|webp|woff|woff2))",
+      "source": "/(.*\\.(?:ico|png|jpg|jpeg|svg|webp|woff|woff2|ttf|eot))",
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, max-age=604800, stale-while-revalidate=86400"
+          "value": "public, max-age=2592000, stale-while-revalidate=86400"
+        }
+      ]
+    },
+    {
+      "source": "/index.html",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
         }
       ]
     },
@@ -24,11 +33,15 @@
       "headers": [
         {
           "key": "Referrer-Policy",
-          "value": "no-referrer-when-downgrade"
+          "value": "strict-origin-when-cross-origin"
         },
         {
           "key": "X-Content-Type-Options",
           "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "SAMEORIGIN"
         }
       ]
     }

@@ -273,7 +273,7 @@ const serverReachabilityCache = new Map<string, { ok: boolean; timestamp: number
  * Verifies if a streaming video or embed server URL is reachable before opening.
  * Uses rapid timeout and cache to prevent lag (Requirement: Video - Verify server URL before opening).
  */
-export async function probeServerReachable(url?: string | null, timeoutMs = 2500): Promise<boolean> {
+export async function probeServerReachable(url?: string | null, timeoutMs = 1200): Promise<boolean> {
   if (!isValidStreamUrl(url)) return false;
   const clean = String(url).trim();
   
