@@ -9,6 +9,8 @@ import {
   sendPasswordResetEmail,
   updateProfile,
   onAuthStateChanged,
+  GoogleAuthProvider,
+  signInWithPopup,
   type User as FirebaseUser
 } from 'firebase/auth';
 import { initializeFirestore, getFirestore, setLogLevel, doc, getDocFromServer } from 'firebase/firestore';
@@ -117,6 +119,8 @@ export {
   sendPasswordResetEmail,
   updateProfile,
   onAuthStateChanged,
+  GoogleAuthProvider,
+  signInWithPopup,
   type FirebaseUser
 };
 

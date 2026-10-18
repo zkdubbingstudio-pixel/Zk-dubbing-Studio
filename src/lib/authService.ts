@@ -6,7 +6,9 @@ import {
   signInWithEmailAndPassword, 
   signOut, 
   sendPasswordResetEmail, 
-  updateProfile 
+  updateProfile,
+  GoogleAuthProvider,
+  signInWithPopup
 } from './firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { supabase } from './supabase';
@@ -260,6 +262,36 @@ export async function signInWithFirebase(
     // Throw the original Firebase error without replacing or masking it!
     throw err;
   }
+}
+
+/**
+  * Sign In with Google Provider (Firebase Auth popup)
+  */
+export async function signInWithGoogle(): Promise<User> {
+  if (!auth) {
+    const err = new Error('Firebase Authentication is not initialized.');
+    (err as any).code = 'auth/not-initialized';
+    throw err;
+  }
+
+  await ensureAuthPersistence();
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+  const result = await signInWithPopup(auth, provider);
+  const fbUser = result.user;
+
+  const profile = await loadUserProfileFromSupabase(
+    fbUser.uid,
+    fbUser.email,
+    fbUser.displayName
+  );
+
+  if (fbUser.photoURL && !profile.photoURL) {
+    profile.photoURL = fbUser.photoURL;
+    profile.profilePhoto = fbUser.photoURL;
+  }
+
+  return profile;
 }
 
 /**

@@ -15,8 +15,11 @@ export interface User {
   full_name?: string;
   photoURL: string;
   profilePhoto?: string;
+  avatarUrl?: string;
   role: 'user' | 'admin' | 'owner';
   isBanned?: boolean;
+  isPremium?: boolean;
+  premiumTier?: 'free' | 'pro' | 'vip';
   createdAt: number;
   lastLogin?: string;
   settings?: UserSettings;
@@ -99,6 +102,11 @@ export interface Episode {
   vdohide_url?: string;
   videoUrl?: string;
   duration?: number | string;
+  isEarlyAccess?: boolean;
+  isPremiumOnly?: boolean;
+  introStart?: number;
+  introEnd?: number;
+  endingStart?: number;
   createdAt?: number;
 }
 
@@ -128,4 +136,27 @@ export interface Favorite {
   userId: string;
   animeId: string;
   createdAt: number;
+}
+
+export interface AnimeRequest {
+  id: string;
+  title: string;
+  userId?: string;
+  userEmail?: string;
+  userName?: string;
+  notes?: string;
+  status?: 'pending' | 'approved' | 'in_dubbing' | 'completed';
+  upvotes?: number;
+  upvotedBy?: string[];
+  createdAt?: any;
+}
+
+export interface AppNotification {
+  id: string;
+  title: string;
+  message: string;
+  type: 'episode' | 'anime' | 'announcement';
+  link?: string;
+  createdAt: number | string;
+  read?: boolean;
 }
