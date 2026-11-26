@@ -72,7 +72,7 @@ export default function AdminEpisodes() {
       setSeasons(seasonsList || []);
       setEpisodes(epList || []);
     } catch (err: any) {
-      console.error("[Supabase Real Error - AdminEpisodes fetchData]:", err);
+      console.error("[Firestore Error - AdminEpisodes fetchData]:", err);
       const exactMsg = formatDbError(err);
       setError(`Database Error: ${exactMsg}`);
     } finally {
@@ -206,7 +206,7 @@ export default function AdminEpisodes() {
       // Requirement 6: After saving, refresh the episode list
       await fetchData();
     } catch (err: any) {
-      console.error("[Supabase Real Error - saving episode]:", err);
+      console.error("[Firestore Error - saving episode]:", err);
       const exactMsg = formatDbError(err);
       setError(`Database Error: ${exactMsg}`);
     } finally {
@@ -242,7 +242,7 @@ export default function AdminEpisodes() {
     const targetTitle = episodeToDelete.title;
 
     try {
-      // 1. Delete from Firestore & Supabase & purge server URLs & invalidate caches
+      // 1. Delete from Cloud Firestore & purge server URLs & invalidate caches
       await deleteEpisodeBoth(targetId);
 
       // Immediate optimistic UI update
@@ -266,7 +266,7 @@ export default function AdminEpisodes() {
       setSuccessMsg("Episode deleted successfully.");
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
-      console.error("[Supabase Real Error - deleting episode]:", err);
+      console.error("[Firestore Error - deleting episode]:", err);
       const exactError = formatDbError(err);
       setDeleteDialogError(exactError);
       setError(`Failed to delete episode: ${exactError}`);
@@ -1134,7 +1134,7 @@ export default function AdminEpisodes() {
                   Are you sure you want to delete this episode?
                 </h3>
                 <p className="text-xs text-white/60">
-                  This action is permanent. The episode will be deleted from both Firestore and Supabase, and its streaming server URLs will be removed.
+                  This action is permanent. The episode will be deleted from Cloud Firestore, and its streaming server URLs will be removed.
                 </p>
                 <div className="mt-2 p-2.5 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-white/90">
                   {episodeToDelete.title}
@@ -1200,7 +1200,7 @@ export default function AdminEpisodes() {
                   Are you sure you want to delete this episode?
                 </h3>
                 <p className="text-xs text-white/60">
-                  You are about to delete <span className="text-white font-bold">{selectedIds.length}</span> selected episodes from both Firestore and Supabase, and remove all related streaming server URLs.
+                  You are about to delete <span className="text-white font-bold">{selectedIds.length}</span> selected episodes from Cloud Firestore, and remove all related streaming server URLs.
                 </p>
               </div>
             </div>

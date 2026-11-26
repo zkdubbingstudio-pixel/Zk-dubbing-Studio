@@ -1,23 +1,27 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { 
   Film, PlaySquare, Layers, Clock, TrendingUp, Home, Settings,
   Eye, MonitorSmartphone, Calendar, MessageSquare, Heart, Star,
   Activity, Bell, Plus, CheckCircle2, Sparkles, FolderOpen, Flame, 
-  ExternalLink, ArrowUpRight, ShieldCheck, Zap
+  ExternalLink, ArrowUpRight, ShieldCheck, Zap, Radio, Users
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { getAllAnime, getAllSeasons, getAllEpisodes } from '../../lib/dataService';
-import { supabase } from '../../lib/supabase';
+import { db } from '../../lib/firebase';
+import { collection, onSnapshot, getDocs } from 'firebase/firestore';
+import { subscribeToLiveVisitors, LiveVisitorRecord } from '../../lib/telemetryService';
 import SmartImage from '../../components/SmartImage';
 
 export default function AdminDashboard() {
   const [animeList, setAnimeList] = useState<any[]>([]);
   const [seasonsList, setSeasonsList] = useState<any[]>([]);
   const [episodesList, setEpisodesList] = useState<any[]>([]);
+  const [liveVisitors, setLiveVisitors] = useState<LiveVisitorRecord[]>([]);
   const [userCount, setUserCount] = useState<number>(0);
   const [loading, setLoading] = useState(true);
 
-  const fetchDashboardData = async () => {
+  // Fetch Dashboard Data from primary database with retry and error safety
+  const fetchDashboardData = useCallback(async (isSilent = false) => {
     try {
       const [animes, seasons, episodes] = await Promise.all([
         getAllAnime().catch(() => []),
@@ -29,53 +33,156 @@ export default function AdminDashboard() {
       setSeasonsList(seasons || []);
       setEpisodesList(episodes || []);
 
-      try {
-        const { count } = await supabase.from('users').select('*', { count: 'exact', head: true });
-        if (count) setUserCount(count);
-      } catch {}
+      if (db) {
+        try {
+          const usersSnap = await getDocs(collection(db, 'users'));
+          setUserCount(usersSnap.size);
+        } catch {}
+      }
     } catch {
-      // ignore
+      // ignore transient failures
     } finally {
-      setLoading(false);
+      if (!isSilent) {
+        setLoading(false);
+      }
     }
-  };
+  }, []);
 
+  // 1. Initial Load & Real-time Listeners
   useEffect(() => {
-    fetchDashboardData();
+    fetchDashboardData(false);
 
+    // Real-time Firestore Live Visitors listener (via onSnapshot)
+    const unsubVisitors = subscribeToLiveVisitors((visitors) => {
+      setLiveVisitors(visitors || []);
+    });
+
+    // Real-time Firestore listener for anime updates
+    let unsubAnime: (() => void) | undefined;
+    if (db) {
+      try {
+        unsubAnime = onSnapshot(collection(db, 'anime'), (snapshot) => {
+          if (!snapshot.empty) {
+            const fAnime: any[] = [];
+            snapshot.forEach((docSnap) => {
+              fAnime.push({ id: docSnap.id, ...docSnap.data() });
+            });
+            setAnimeList((prev) => {
+              const map = new Map<string, any>();
+              prev.forEach((a) => map.set(a.id, a));
+              fAnime.forEach((a) => map.set(a.id, { ...map.get(a.id), ...a }));
+              return Array.from(map.values());
+            });
+          }
+        }, (err) => {
+          console.warn('[Firestore] Anime snapshot error notice:', err);
+        });
+      } catch {}
+    }
+
+    // Real-time Firestore listener for episode updates
+    let unsubEpisodes: (() => void) | undefined;
+    if (db) {
+      try {
+        unsubEpisodes = onSnapshot(collection(db, 'episodes'), (snapshot) => {
+          if (!snapshot.empty) {
+            const fEps: any[] = [];
+            snapshot.forEach((docSnap) => {
+              fEps.push({ id: docSnap.id, ...docSnap.data() });
+            });
+            setEpisodesList((prev) => {
+              const map = new Map<string, any>();
+              prev.forEach((e) => map.set(e.id, e));
+              fEps.forEach((e) => map.set(e.id, { ...map.get(e.id), ...e }));
+              return Array.from(map.values());
+            });
+          }
+        }, (err) => {
+          console.warn('[Firestore] Episodes snapshot error notice:', err);
+        });
+      } catch {}
+    }
+
+    // Real-time Firestore listener for season updates
+    let unsubSeasons: (() => void) | undefined;
+    if (db) {
+      try {
+        unsubSeasons = onSnapshot(collection(db, 'seasons'), (snapshot) => {
+          const fSeasons: any[] = [];
+          snapshot.forEach((docSnap) => {
+            fSeasons.push({ id: docSnap.id, ...docSnap.data() });
+          });
+          setSeasonsList(fSeasons);
+        }, (err) => {
+          console.warn('[Firestore] Seasons snapshot error notice:', err);
+        });
+      } catch {}
+    }
+
+    // Event listeners for in-app publication triggers
     const handleUpdate = () => {
-      fetchDashboardData();
+      fetchDashboardData(true);
     };
 
     window.addEventListener('zk_data_changed', handleUpdate);
     window.addEventListener('zk_anime_published', handleUpdate);
     window.addEventListener('zk_episode_published', handleUpdate);
+    window.addEventListener('zk_views_updated', handleUpdate);
+
+    // Auto-refresh pulse every 8 seconds for real-time views freshness
+    const interval = setInterval(() => {
+      fetchDashboardData(true);
+    }, 8000);
 
     return () => {
+      unsubVisitors();
+      if (unsubAnime) unsubAnime();
+      if (unsubEpisodes) unsubEpisodes();
+      if (unsubSeasons) unsubSeasons();
       window.removeEventListener('zk_data_changed', handleUpdate);
       window.removeEventListener('zk_anime_published', handleUpdate);
       window.removeEventListener('zk_episode_published', handleUpdate);
+      window.removeEventListener('zk_views_updated', handleUpdate);
+      clearInterval(interval);
     };
-  }, []);
+  }, [fetchDashboardData]);
 
-  // Compute Required Metric Values
+  // Compute Real Metric Values (strictly from real database, zero fake numbers)
   const totalAnime = animeList.length;
   const totalEpisodes = episodesList.length;
   const publishedEpisodes = episodesList.filter(e => e.published !== false).length;
-  const draftEpisodes = episodesList.filter(e => e.published === false).length;
-  const featuredAnime = animeList.filter(a => a.featured === true).length;
-  const trendingAnime = animeList.filter(a => a.trending === true).length;
+  const pendingPublishCount = episodesList.filter(e => e.published === false).length;
+  const featuredCount = animeList.filter(a => a.featured === true).length;
+  const trendingCount = animeList.filter(a => a.trending === true).length;
 
-  const totalViews = animeList.reduce((acc, curr) => acc + (Number(curr.views) || 0), 0) +
-    episodesList.reduce((acc, curr) => acc + (Number(curr.views) || 0), 0);
-  const displayTotalViews = Math.max(totalViews, 142850);
+  // Live Viewers: real active visitors currently playing an episode
+  const liveViewersCount = liveVisitors.filter(v => Boolean(v.isPlaying)).length;
 
-  // Most Watched Anime (Sorted by views)
-  const mostWatched = [...animeList]
-    .sort((a, b) => (Number(b.views) || 0) - (Number(a.views) || 0))
-    .slice(0, 5);
+  // Total Views: real sum of all episode views
+  const totalEpisodeViews = episodesList.reduce((acc, curr) => acc + (Number(curr.views) || 0), 0);
 
-  // Recently Added Anime & Episodes
+  // Most Watched Anime: automatically rank by real views (anime.views or aggregated episode views)
+  const mostWatched = useMemo(() => {
+    return [...animeList]
+      .map((anime) => {
+        const episodeViewsSum = episodesList
+          .filter((e) => e.animeId === anime.id || e.anime_id === anime.id)
+          .reduce((sum, ep) => sum + (Number(ep.views) || 0), 0);
+        
+        const realTotalViews = Math.max(Number(anime.views) || 0, episodeViewsSum);
+        return {
+          ...anime,
+          realTotalViews,
+        };
+      })
+      .sort((a, b) => b.realTotalViews - a.realTotalViews)
+      .slice(0, 5);
+  }, [animeList, episodesList]);
+
+  // Highest views for accurate relative bar calculation
+  const topWatchedViews = mostWatched[0]?.realTotalViews || 0;
+
+  // Recently Added Anime & Episodes (real data)
   const recentAnime = [...animeList].slice(0, 4);
   const recentEpisodes = [...episodesList].slice(0, 4);
 
@@ -83,7 +190,7 @@ export default function AdminDashboard() {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-white/50">
         <div className="w-12 h-12 border-4 border-white/10 border-t-brand rounded-full animate-spin mb-4 shadow-[0_0_20px_rgba(0,229,255,0.4)]"></div>
-        <p className="text-sm font-bold">Synchronizing Live Admin Telemetry...</p>
+        <p className="text-sm font-bold">Connecting Live Cloud Firestore Streams...</p>
       </div>
     );
   }
@@ -99,13 +206,16 @@ export default function AdminDashboard() {
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-brand text-black shadow-[0_0_10px_rgba(0,229,255,0.4)]">
                 Admin Control Deck
               </span>
-              <span className="text-xs text-white/50">• Firestore &amp; Supabase Active</span>
+              <span className="text-xs text-white/50 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                <span>Live Firestore onSnapshot Active</span>
+              </span>
             </div>
             <h1 className="text-2xl md:text-3xl font-black text-white tracking-tight">
               ZK Voice Hub Dashboard
             </h1>
             <p className="text-xs md:text-sm text-white/60 mt-1 max-w-xl">
-              Real-time monitoring of anime titles, seasons, Server 1 &amp; Server 2 streaming embeds, and platform viewership.
+              Live telemetry monitoring of streaming viewership, catalog titles, Server 1 &amp; Server 2 embeds, and episode releases.
             </p>
           </div>
 
@@ -127,17 +237,81 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Core Features: 10 Required Metric Badges */}
+      {/* Core Real-time Metrics Grid */}
       <section>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-bold text-white flex items-center gap-2">
             <Activity className="w-4 h-4 text-brand" /> Core Platform Metrics
           </h2>
-          <span className="text-xs text-white/40">Auto-synced</span>
+          <span className="text-xs text-emerald-400 font-bold flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            Real-Time Sync
+          </span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3.5">
-          {/* Total Anime */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3.5">
+          {/* 1. Live Viewers */}
+          <div className="bg-black/40 border border-emerald-500/40 hover:border-emerald-400 rounded-2xl p-4 transition-all hover:-translate-y-0.5 group shadow-[0_0_15px_rgba(16,185,129,0.15)]">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400">Live Viewers</span>
+              <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <Radio className="w-3.5 h-3.5" />
+              </div>
+            </div>
+            <p className="text-2xl font-black text-emerald-400">{liveViewersCount}</p>
+            <p className="text-[10px] text-white/40 mt-1">Watching episode</p>
+          </div>
+
+          {/* 2. Total Views (Sum of all episode views) */}
+          <div className="bg-black/40 border border-brand/30 hover:border-brand rounded-2xl p-4 transition-all hover:-translate-y-0.5 group shadow-[0_0_15px_rgba(0,229,255,0.15)]">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-brand">Total Views</span>
+              <div className="p-1.5 rounded-lg bg-brand/10 text-brand">
+                <Eye className="w-4 h-4" />
+              </div>
+            </div>
+            <p className="text-2xl font-black text-brand">{totalEpisodeViews.toLocaleString()}</p>
+            <p className="text-[10px] text-white/40 mt-1">Sum of episode views</p>
+          </div>
+
+          {/* 3. Pending Publish */}
+          <div className="bg-black/40 border border-amber-500/30 hover:border-amber-400 rounded-2xl p-4 transition-all hover:-translate-y-0.5 group">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-400">Pending Publish</span>
+              <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400">
+                <Clock className="w-4 h-4" />
+              </div>
+            </div>
+            <p className="text-2xl font-black text-amber-400">{pendingPublishCount}</p>
+            <p className="text-[10px] text-white/40 mt-1">Unpublished drafts</p>
+          </div>
+
+          {/* 4. Featured */}
+          <div className="bg-black/40 border border-yellow-500/30 hover:border-yellow-400 rounded-2xl p-4 transition-all hover:-translate-y-0.5 group">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-yellow-400">Featured</span>
+              <div className="p-1.5 rounded-lg bg-yellow-500/10 text-yellow-400">
+                <Star className="w-4 h-4" />
+              </div>
+            </div>
+            <p className="text-2xl font-black text-yellow-400">{featuredCount}</p>
+            <p className="text-[10px] text-white/40 mt-1">Hero banners</p>
+          </div>
+
+          {/* 5. Trending */}
+          <div className="bg-black/40 border border-rose-500/30 hover:border-rose-400 rounded-2xl p-4 transition-all hover:-translate-y-0.5 group">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-rose-400">Trending</span>
+              <div className="p-1.5 rounded-lg bg-rose-500/10 text-rose-400">
+                <Flame className="w-4 h-4" />
+              </div>
+            </div>
+            <p className="text-2xl font-black text-rose-400">{trendingCount}</p>
+            <p className="text-[10px] text-white/40 mt-1">Trending badge</p>
+          </div>
+
+          {/* 6. Total Anime */}
           <div className="bg-black/40 border border-white/10 hover:border-brand/40 rounded-2xl p-4 transition-all hover:-translate-y-0.5 group">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-extrabold uppercase tracking-wider text-white/40">Total Anime</span>
@@ -149,7 +323,7 @@ export default function AdminDashboard() {
             <p className="text-[10px] text-white/40 mt-1">Catalog titles</p>
           </div>
 
-          {/* Total Episodes */}
+          {/* 7. Total Episodes */}
           <div className="bg-black/40 border border-white/10 hover:border-brand/40 rounded-2xl p-4 transition-all hover:-translate-y-0.5 group">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-extrabold uppercase tracking-wider text-white/40">Total Episodes</span>
@@ -161,7 +335,7 @@ export default function AdminDashboard() {
             <p className="text-[10px] text-white/40 mt-1">Across all seasons</p>
           </div>
 
-          {/* Published Episodes */}
+          {/* 8. Published Episodes */}
           <div className="bg-black/40 border border-white/10 hover:border-brand/40 rounded-2xl p-4 transition-all hover:-translate-y-0.5 group">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-extrabold uppercase tracking-wider text-white/40">Published</span>
@@ -172,72 +346,22 @@ export default function AdminDashboard() {
             <p className="text-2xl font-black text-emerald-400">{publishedEpisodes}</p>
             <p className="text-[10px] text-white/40 mt-1">Live to viewers</p>
           </div>
-
-          {/* Draft Episodes */}
-          <div className="bg-black/40 border border-white/10 hover:border-brand/40 rounded-2xl p-4 transition-all hover:-translate-y-0.5 group">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-extrabold uppercase tracking-wider text-white/40">Drafts</span>
-              <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400">
-                <Clock className="w-4 h-4" />
-              </div>
-            </div>
-            <p className="text-2xl font-black text-amber-400">{draftEpisodes}</p>
-            <p className="text-[10px] text-white/40 mt-1">Pending publish</p>
-          </div>
-
-          {/* Featured Anime */}
-          <div className="bg-black/40 border border-white/10 hover:border-brand/40 rounded-2xl p-4 transition-all hover:-translate-y-0.5 group">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-extrabold uppercase tracking-wider text-white/40">Featured</span>
-              <div className="p-1.5 rounded-lg bg-yellow-500/10 text-yellow-400">
-                <Star className="w-4 h-4" />
-              </div>
-            </div>
-            <p className="text-2xl font-black text-yellow-400">{featuredAnime}</p>
-            <p className="text-[10px] text-white/40 mt-1">Hero banners</p>
-          </div>
-
-          {/* Trending Anime */}
-          <div className="bg-black/40 border border-white/10 hover:border-brand/40 rounded-2xl p-4 transition-all hover:-translate-y-0.5 group">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-extrabold uppercase tracking-wider text-white/40">Trending</span>
-              <div className="p-1.5 rounded-lg bg-rose-500/10 text-rose-400">
-                <Flame className="w-4 h-4" />
-              </div>
-            </div>
-            <p className="text-2xl font-black text-rose-400">{trendingAnime}</p>
-            <p className="text-[10px] text-white/40 mt-1">Trending badge</p>
-          </div>
-
-          {/* Total Views */}
-          <div className="bg-black/40 border border-brand/30 hover:border-brand rounded-2xl p-4 transition-all hover:-translate-y-0.5 group shadow-[0_0_15px_rgba(0,229,255,0.15)] col-span-2 sm:col-span-1">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-extrabold uppercase tracking-wider text-brand">Total Views</span>
-              <div className="p-1.5 rounded-lg bg-brand/10 text-brand">
-                <Eye className="w-4 h-4" />
-              </div>
-            </div>
-            <p className="text-2xl font-black text-brand">{displayTotalViews.toLocaleString()}</p>
-            <p className="text-[10px] text-emerald-400 font-bold mt-1 flex items-center gap-0.5">
-              <ArrowUpRight className="w-3 h-3" /> Live Telemetry
-            </p>
-          </div>
         </div>
       </section>
 
-      {/* Row: Most Watched Anime & Quick Actions */}
+      {/* Row: Most Watched Anime & Quick Operations */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Most Watched Anime */}
+        {/* Most Watched Anime: Ranked automatically by real views */}
         <div className="lg:col-span-2 bg-black/40 border border-white/10 rounded-3xl p-6 backdrop-blur-md space-y-4">
           <div className="flex items-center justify-between pb-2 border-b border-white/10">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
                 <Flame className="w-4 h-4 text-brand" /> Most Watched Anime
               </h2>
-              <p className="text-xs text-white/50">Top streamed series by audience engagement</p>
+              <p className="text-xs text-white/50">Automatically ranked by real database total views</p>
             </div>
             <Link to="/admin/analytics" className="text-xs font-bold text-brand hover:underline">
-              View Analytics →
+              Full Analytics →
             </Link>
           </div>
 
@@ -246,8 +370,16 @@ export default function AdminDashboard() {
               <p className="text-xs text-white/40 py-8 text-center">No anime titles found.</p>
             ) : (
               mostWatched.map((anime, idx) => {
-                const views = Number(anime.views) || (mostWatched.length - idx) * 3240 + 820;
-                const percentage = Math.min(Math.round((views / (mostWatched[0]?.views || 10000)) * 100), 100);
+                const views = anime.realTotalViews;
+                const percentage = topWatchedViews > 0 
+                  ? Math.min(Math.round((views / topWatchedViews) * 100), 100) 
+                  : 0;
+
+                // Format genres safely
+                const genresText = Array.isArray(anime.genres) && anime.genres.length > 0
+                  ? anime.genres.slice(0, 2).join(', ')
+                  : (typeof anime.genres === 'string' && anime.genres ? anime.genres : 'Anime');
+
                 return (
                   <div 
                     key={anime.id}
@@ -265,7 +397,7 @@ export default function AdminDashboard() {
                       <div className="w-12 h-14 rounded-xl overflow-hidden flex-shrink-0 border border-white/10 group-hover:scale-105 transition-transform">
                         <SmartImage 
                           src={anime.poster_url || anime.posterUrl || anime.banner_url || anime.bannerUrl || ""} 
-                          alt={anime.title} 
+                          alt={anime.title || 'Anime Poster'} 
                           type="poster"
                           className="w-full h-full"
                           style={{ objectFit: 'cover', objectPosition: 'center center' }}
@@ -273,14 +405,21 @@ export default function AdminDashboard() {
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <p className="text-xs font-bold text-white truncate group-hover:text-brand transition-colors">{anime.title}</p>
+                          <p className="text-xs font-bold text-white truncate group-hover:text-brand transition-colors">
+                            {anime.title || 'Untitled Anime'}
+                          </p>
                           {anime.featured && (
                             <span className="text-[9px] px-1.5 py-0.2 rounded bg-yellow-500/20 text-yellow-300 font-bold">Featured</span>
                           )}
+                          {anime.trending && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 font-bold">Trending</span>
+                          )}
                         </div>
-                        <p className="text-[11px] text-white/40 mt-0.5">{anime.status || 'Ongoing'} • {anime.genres?.slice(0, 2).join(', ') || 'Action'}</p>
+                        <p className="text-[11px] text-white/40 mt-0.5">
+                          {anime.status || 'Catalog'} • {genresText}
+                        </p>
                         
-                        {/* Progress Bar */}
+                        {/* Real Progress Bar */}
                         <div className="w-full bg-white/10 rounded-full h-1.5 mt-2 overflow-hidden">
                           <div 
                             className="bg-brand h-full rounded-full transition-all duration-500" 
@@ -301,7 +440,7 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* Quick Actions Panel */}
+        {/* Quick Operations Panel */}
         <div className="bg-black/40 border border-white/10 rounded-3xl p-6 backdrop-blur-md flex flex-col justify-between space-y-4">
           <div>
             <div className="pb-3 border-b border-white/10 mb-4">
@@ -380,7 +519,7 @@ export default function AdminDashboard() {
           </div>
 
           <div className="pt-3 border-t border-white/10 flex items-center justify-between text-xs text-white/50">
-            <span>Dual Sync Engine:</span>
+            <span>Firebase Sync Engine:</span>
             <span className="text-emerald-400 font-bold flex items-center gap-1">
               <CheckCircle2 className="w-3.5 h-3.5" /> Synchronized
             </span>
@@ -417,15 +556,17 @@ export default function AdminDashboard() {
                     <div className="w-10 h-10 rounded-xl overflow-hidden flex-shrink-0 border border-white/10">
                       <SmartImage 
                         src={anime.poster_url || anime.posterUrl || anime.banner_url || anime.bannerUrl || ""} 
-                        alt={anime.title} 
+                        alt={anime.title || 'Anime Poster'} 
                         type="poster"
                         className="w-full h-full"
                         style={{ objectFit: 'cover', objectPosition: 'center center' }}
                       />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-xs font-bold text-white truncate">{anime.title}</p>
-                      <p className="text-[10px] text-white/40">{anime.status || 'Ongoing'} • {anime.releaseYear || anime.release_year || '2024'}</p>
+                      <p className="text-xs font-bold text-white truncate">{anime.title || 'Untitled Anime'}</p>
+                      <p className="text-[10px] text-white/40">
+                        {anime.status || 'Catalog'} • {anime.releaseYear || anime.release_year || 'Series'}
+                      </p>
                     </div>
                   </div>
                   <Link
@@ -481,7 +622,7 @@ export default function AdminDashboard() {
                     </div>
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-white truncate">Episode {ep.episodeNumber}: {ep.title || 'Untitled'}</p>
-                      <p className="text-[10px] text-white/40">{ep.duration || '24m'} • {ep.published !== false ? 'Published' : 'Draft'}</p>
+                      <p className="text-[10px] text-white/40">{ep.duration || 'Standard'} • {ep.published !== false ? 'Published' : 'Draft'}</p>
                     </div>
                   </div>
                   <Link

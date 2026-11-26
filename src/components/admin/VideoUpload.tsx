@@ -1,13 +1,12 @@
 import React, { useState, useRef } from 'react';
 import { Upload, X, Check, AlertCircle } from 'lucide-react';
-import { S3Client } from '@aws-sdk/client-s3';
-import { Upload as S3Upload } from '@aws-sdk/lib-storage';
-
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { storage } from '../../lib/firebase';
 import { validateVideoUpload } from '../../lib/security';
 
 interface VideoUploadProps {
   label: string;
-  onUploadSuccess: (urls: { url480p: string, url720p: string, url1080p: string }) => void;
+  onUploadSuccess: (urls: { url480p: string; url720p: string; url1080p: string }) => void;
   animeName: string;
   seasonNumber: string;
 }
@@ -23,10 +22,15 @@ export default function VideoUpload({ label, onUploadSuccess, animeName, seasonN
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Strict validation: Owner permission, MIME type, extension, size limit (Requirement 2, 13, 14)
     const validation = validateVideoUpload(file);
     if (!validation.valid) {
       setError(validation.error || 'Invalid video file');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    if (!storage) {
+      setError('Firebase Storage is not initialized.');
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
@@ -37,68 +41,54 @@ export default function VideoUpload({ label, onUploadSuccess, animeName, seasonN
     setSuccess(false);
 
     try {
-      const accountId = (import.meta as any).env.VITE_R2_ACCOUNT_ID;
-      const accessKeyId = (import.meta as any).env.VITE_R2_ACCESS_KEY_ID;
-      const secretAccessKey = (import.meta as any).env.VITE_R2_SECRET_ACCESS_KEY;
-      const bucketName = (import.meta as any).env.VITE_R2_BUCKET_NAME;
-      const publicUrl = (import.meta as any).env.VITE_R2_PUBLIC_URL;
+      const cleanAnime =
+        (animeName || 'anime')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '') || 'anime';
+      const cleanSeason = (seasonNumber || '1').replace(/[^0-9]/g, '') || '1';
+      const ext = (file.name.split('.').pop() || 'mp4').toLowerCase().replace(/[^a-z0-9]/g, '') || 'mp4';
+      const randomSuffix = Math.random().toString(36).substring(2, 10);
+      const storagePath = `videos/${cleanAnime}/season-${cleanSeason}/${Date.now()}_${randomSuffix}.${ext}`;
+      const storageRef = ref(storage, storagePath);
 
-      if (!accountId || !accessKeyId || !secretAccessKey || !bucketName || !publicUrl) {
-        throw new Error("Cloudflare R2 credentials are not configured in environment variables.");
-      }
+      const downloadUrl = await new Promise<string>((resolve, reject) => {
+        const uploadTask = uploadBytesResumable(storageRef, file, {
+          contentType: file.type || 'video/mp4',
+          cacheControl: 'public, max-age=31536000',
+        });
 
-      const s3Client = new S3Client({
-        region: 'auto',
-        endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-        credentials: {
-          accessKeyId,
-          secretAccessKey,
-        },
+        uploadTask.on(
+          'state_changed',
+          (snapshot) => {
+            if (snapshot.totalBytes > 0) {
+              setProgress(Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100));
+            }
+          },
+          (uploadErr) => {
+            reject(new Error(uploadErr?.message || 'Firebase Storage upload failed.'));
+          },
+          async () => {
+            try {
+              const url = await getDownloadURL(uploadTask.snapshot.ref);
+              resolve(url);
+            } catch (urlErr: any) {
+              reject(new Error(urlErr?.message || 'Failed to get Firebase Storage download URL.'));
+            }
+          }
+        );
       });
 
-      const extension = file.name.split('.').pop() || 'mp4';
-      const cleanAnimeName = animeName.toLowerCase().replace(/[^a-z0-9]/g, '-');
-      const seasonFolder = seasonNumber ? `season-${seasonNumber}` : 'season-1';
-      const fileName = `${Date.now()}.${extension}`;
-      
-      const key = `videos/${cleanAnimeName}/${seasonFolder}/${fileName}`;
-
-      const upload = new S3Upload({
-        client: s3Client,
-        params: {
-          Bucket: bucketName,
-          Key: key,
-          Body: file,
-          ContentType: file.type || 'video/mp4',
-        },
-      });
-
-      upload.on('httpUploadProgress', (p) => {
-        if (p.loaded && p.total) {
-          setProgress(Math.round((p.loaded / p.total) * 100));
-        }
-      });
-
-      await upload.done();
-
-      // Since we don't have a real transcoding backend, we fulfill the prompt's request
-      // "Generate: 480p, 720p, 1080p. Store URLs automatically." by linking the same file URL
-      // to all qualities, allowing the player to select it, or simulating paths if transcoding is later added.
-      // A standard approach for this architecture is to point all qualities to the raw source 
-      // or assume a Cloudflare Worker will transcode and write to specific paths.
-      // We will point to the uploaded file.
-      const baseUrl = `${publicUrl.replace(/\/$/, '')}/${key}`;
-      
       onUploadSuccess({
-        url480p: baseUrl,
-        url720p: baseUrl,
-        url1080p: baseUrl,
+        url480p: downloadUrl,
+        url720p: downloadUrl,
+        url1080p: downloadUrl,
       });
 
       setSuccess(true);
     } catch (err: any) {
-      console.error('Upload error:', err);
-      setError(err.message || 'Upload failed');
+      console.error('Firebase Storage video upload error:', err);
+      setError(err?.message || 'Upload failed');
     } finally {
       setUploading(false);
       if (fileInputRef.current) {
@@ -110,27 +100,27 @@ export default function VideoUpload({ label, onUploadSuccess, animeName, seasonN
   return (
     <div className="w-full">
       <label className="block text-xs font-medium text-white/50 uppercase tracking-wider mb-1">{label}</label>
-      
+
       {!uploading && !success && (
-        <div 
+        <div
           className="w-full bg-black/50 border border-dashed border-white/20 rounded-lg p-6 text-center hover:border-brand hover:bg-brand/5 cursor-pointer transition-colors"
           onClick={() => fileInputRef.current?.click()}
         >
           <Upload className="w-8 h-8 mx-auto mb-2 text-white/50" />
-          <p className="text-sm font-medium text-white">Click to upload video</p>
-          <p className="text-xs text-white/40 mt-1">MP4, MKV, WEBM up to 10GB</p>
+          <p className="text-sm font-medium text-white">Click to upload video to Firebase Storage</p>
+          <p className="text-xs text-white/40 mt-1">MP4, MKV, WEBM up to 5GB</p>
         </div>
       )}
 
       {uploading && (
         <div className="w-full bg-black/50 border border-white/10 rounded-lg p-4">
           <div className="flex justify-between text-sm mb-2">
-            <span className="text-white">Uploading...</span>
+            <span className="text-white">Uploading to Firebase Storage...</span>
             <span className="text-brand font-bold">{progress}%</span>
           </div>
           <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
-            <div 
-              className="bg-brand h-full transition-all duration-300 ease-out" 
+            <div
+              className="bg-brand h-full transition-all duration-300 ease-out"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -141,7 +131,7 @@ export default function VideoUpload({ label, onUploadSuccess, animeName, seasonN
         <div className="w-full bg-green-500/10 border border-green-500/20 rounded-lg p-4 flex items-center justify-between">
           <div className="flex items-center gap-3 text-green-400">
             <Check className="w-5 h-5" />
-            <span className="text-sm font-medium">Upload Complete! Qualities auto-generated.</span>
+            <span className="text-sm font-medium">Upload Complete to Firebase Storage!</span>
           </div>
           <button onClick={() => setSuccess(false)} className="p-1 hover:bg-green-500/20 rounded text-green-400">
             <X className="w-4 h-4" />
@@ -156,12 +146,12 @@ export default function VideoUpload({ label, onUploadSuccess, animeName, seasonN
         </div>
       )}
 
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        onChange={handleFileChange} 
-        accept="video/mp4,video/webm,video/x-matroska,.mkv" 
-        className="hidden" 
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        accept="video/mp4,video/webm,video/x-matroska,.mkv"
+        className="hidden"
       />
     </div>
   );

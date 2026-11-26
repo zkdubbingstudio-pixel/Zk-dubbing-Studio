@@ -1,28 +1,28 @@
 /**
- * ZK Voice Hub - Data Service
- * Architecture: Supabase = Main Database (100% of Content & Media) | Firebase = Auth Only
- * 
- * Rules:
- * 1. Zero cache fallbacks. Zero mock/sample data.
- * 2. Anime, Episodes, Seasons, Continue Watching, Genres fetched strictly from Supabase.
- * 3. Supabase query timeout: at least 20 seconds (configured at 25 seconds).
- * 4. Automatic retry logic (3 retries) on transient errors before propagating failure.
- * 5. If Supabase is empty, return empty array/null so UI displays clean empty state.
- * 6. Zero Firestore content reads.
+ * ZK Voice Hub - Cloud Firestore Data Service
+ * 100% Firebase Architecture: Cloud Firestore + Firebase Auth + Firebase Storage + App Check + Analytics
  */
 
-import { supabase, executeSupabaseWithRetry, formatDbError, verifyRlsPolicies } from './supabase';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  query,
+  where,
+  orderBy,
+  limit,
+} from 'firebase/firestore';
+import { auth, db, handleFirestoreError, OperationType, trackFirebaseAnalyticsEvent } from './firebase';
 import { getCachedData, setCachedData, clearCachedData, clearCachePrefix } from './cache';
 import { resolveImageUrl } from './imageUtils';
-import { auth } from './firebase';
-import { 
-  assertOwner, 
-  assertAuthenticated, 
-  sanitizeString, 
-  sanitizeUrl 
-} from './security';
+import { assertOwner, isOwnerEmail, sanitizeString, sanitizeUrl } from './security';
 
-export { formatDbError, verifyRlsPolicies, resolveImageUrl };
+export { resolveImageUrl };
 
 export interface AnimeItem {
   id: string;
@@ -41,8 +41,10 @@ export interface AnimeItem {
   rating?: string | number;
   status?: string;
   language?: string;
+  studio?: string;
   dubbedBy?: string;
   dubbed_by?: string;
+  dubCredits?: any;
   views?: number;
   type?: string;
   contentType?: string;
@@ -82,6 +84,7 @@ export interface SeasonItem {
   poster_url?: string;
   order?: number;
   status?: string;
+  releaseYear?: number;
   createdAt?: any;
   created_at?: any;
 }
@@ -125,9 +128,13 @@ export interface EpisodeItem {
   views?: number;
   published?: boolean;
   isMovie?: boolean;
+  isEarlyAccess?: boolean;
+  isPremiumOnly?: boolean;
+  introStart?: number;
+  introEnd?: number;
+  endingStart?: number;
   createdAt?: any;
   created_at?: any;
-  // Joined relational data (Requirement 3)
   anime?: any;
   season?: any;
   animeTitle?: string;
@@ -145,18 +152,44 @@ export interface BackupRecord {
   timestamp: number;
 }
 
-// 17 Days Auto-Expiry Duration for New Drops (in milliseconds)
 export const NEW_DROPS_EXPIRY_MS = 17 * 24 * 60 * 60 * 1000;
 
-// No-op for backwards compatibility with any existing callers
-export function invalidateCache(_pattern?: string): void {}
+export function formatDbError(error: unknown): string {
+  if (!error) return 'Unknown Firestore error';
+  if (typeof error === 'string') return error;
+  const err = error as any;
+  if (err?.message) {
+    try {
+      const parsed = JSON.parse(err.message);
+      if (parsed?.error) return String(parsed.error);
+    } catch {}
+    return String(err.message);
+  }
+  return String(error);
+}
+
+export async function verifyFirestoreHealth(): Promise<{ ok: boolean; details: string }> {
+  if (!db) return { ok: false, details: 'Firestore instance not initialized' };
+  try {
+    await getDoc(doc(db, 'test', 'connection'));
+    return { ok: true, details: 'Cloud Firestore rules and connection active' };
+  } catch (err) {
+    return { ok: false, details: formatDbError(err) };
+  }
+}
+
+export function invalidateCache(_pattern?: string): void {
+  clearCachePrefix('');
+}
+
+function safeDocId(raw: string): string {
+  return String(raw || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '_');
+}
 
 export function getPublishTimestamp(item: any): number {
   if (!item) return 0;
-  if (item.created_at) {
-    const parsed = Date.parse(item.created_at);
-    if (!isNaN(parsed)) return parsed;
-  }
   if (item.createdAt) {
     if (typeof item.createdAt.toMillis === 'function') return item.createdAt.toMillis();
     if (typeof item.createdAt.toDate === 'function') return item.createdAt.toDate().getTime();
@@ -165,78 +198,60 @@ export function getPublishTimestamp(item: any): number {
     const parsed = Date.parse(item.createdAt);
     if (!isNaN(parsed)) return parsed;
   }
+  if (item.created_at) {
+    const parsed = Date.parse(item.created_at);
+    if (!isNaN(parsed)) return parsed;
+  }
   if (item.releaseDate || item.release_date) {
     const parsed = Date.parse(item.releaseDate || item.release_date);
     if (!isNaN(parsed)) return parsed;
   }
-  if (item.updated_at) {
-    const parsed = Date.parse(item.updated_at);
+  if (item.updatedAt || item.updated_at) {
+    const parsed = Date.parse(item.updatedAt || item.updated_at);
     if (!isNaN(parsed)) return parsed;
   }
   return 0;
 }
 
-// Helper to extract clean Abyss embed URL
 export function extractAbyssUrl(input?: string): string {
   if (!input) return '';
   let url = input.trim();
   const iframeMatch = url.match(/src=["']([^"']+)["']/i);
-  if (iframeMatch && iframeMatch[1]) {
-    url = iframeMatch[1].trim();
-  }
-  if (url.startsWith('//')) {
-    url = `https:${url}`;
-  }
+  if (iframeMatch && iframeMatch[1]) url = iframeMatch[1].trim();
+  if (url.startsWith('//')) url = `https:${url}`;
   return url;
 }
 
-// Helper to extract clean FileMoon embed URL
 export function extractFileMoonUrl(input?: string): string {
   if (!input) return '';
   let url = input.trim();
   const iframeMatch = url.match(/src=["']([^"']+)["']/i);
-  if (iframeMatch && iframeMatch[1]) {
-    url = iframeMatch[1].trim();
-  }
-  if (url.includes('filemoon.') && url.includes('/d/')) {
-    url = url.replace('/d/', '/e/');
-  }
-  if (url.startsWith('//')) {
-    url = `https:${url}`;
-  }
+  if (iframeMatch && iframeMatch[1]) url = iframeMatch[1].trim();
+  if (url.includes('filemoon.') && url.includes('/d/')) url = url.replace('/d/', '/e/');
+  if (url.startsWith('//')) url = `https:${url}`;
   return url;
 }
 
-// Helper to extract clean VDOHide embed URL
 export function extractVDOHideUrl(input?: string): string {
   if (!input) return '';
   let url = input.trim();
   const iframeMatch = url.match(/src=["']([^"']+)["']/i);
-  if (iframeMatch && iframeMatch[1]) {
-    url = iframeMatch[1].trim();
-  }
+  if (iframeMatch && iframeMatch[1]) url = iframeMatch[1].trim();
   if ((url.includes('vdohide.') || url.includes('streamhide.') || url.includes('vidhide.')) && url.includes('/d/')) {
     url = url.replace('/d/', '/e/');
   } else if ((url.includes('vdohide.') || url.includes('streamhide.') || url.includes('vidhide.')) && url.includes('/w/')) {
     url = url.replace('/w/', '/e/');
   }
-  if (url.startsWith('//')) {
-    url = `https:${url}`;
-  }
+  if (url.startsWith('//')) url = `https:${url}`;
   return url;
 }
 
-// Helper to validate whether a streaming URL is non-empty, well-formed, and not broken/placeholder
 export function isValidStreamUrl(input?: any): boolean {
   if (!input || typeof input !== 'string') return false;
   let url = input.trim();
   const iframeMatch = url.match(/src=["']([^"']+)["']/i);
-  if (iframeMatch && iframeMatch[1]) {
-    url = iframeMatch[1].trim();
-  }
-  if (url.startsWith('//')) {
-    url = `https:${url}`;
-  }
+  if (iframeMatch && iframeMatch[1]) url = iframeMatch[1].trim();
+  if (url.startsWith('//')) url = `https:${url}`;
   if (url.length < 10) return false;
   const lower = url.toLowerCase();
   if (
@@ -255,12 +270,8 @@ export function isValidStreamUrl(input?: any): boolean {
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-    if (!parsed.hostname || (!parsed.hostname.includes('.') && parsed.hostname !== 'localhost')) {
-      return false;
-    }
-    if (parsed.hostname === 'example.com' || parsed.hostname === 'example.org') {
-      return false;
-    }
+    if (!parsed.hostname || (!parsed.hostname.includes('.') && parsed.hostname !== 'localhost')) return false;
+    if (parsed.hostname === 'example.com' || parsed.hostname === 'example.org') return false;
     return true;
   } catch {
     return false;
@@ -269,38 +280,21 @@ export function isValidStreamUrl(input?: any): boolean {
 
 const serverReachabilityCache = new Map<string, { ok: boolean; timestamp: number }>();
 
-/**
- * Verifies if a streaming video or embed server URL is reachable before opening.
- * Uses rapid timeout and cache to prevent lag (Requirement: Video - Verify server URL before opening).
- */
 export async function probeServerReachable(url?: string | null, timeoutMs = 1200): Promise<boolean> {
   if (!isValidStreamUrl(url)) return false;
   const clean = String(url).trim();
-  
   const cached = serverReachabilityCache.get(clean);
-  if (cached && (Date.now() - cached.timestamp < 60000)) {
-    return cached.ok;
-  }
-
+  if (cached && Date.now() - cached.timestamp < 60000) return cached.ok;
   if (typeof window === 'undefined') return true;
 
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    // Cross-origin HEAD probe in no-cors mode
-    // Network failures (DNS resolution failed, server down, connection refused) will reject
-    await fetch(clean, {
-      method: 'HEAD',
-      mode: 'no-cors',
-      signal: controller.signal,
-    });
+    await fetch(clean, { method: 'HEAD', mode: 'no-cors', signal: controller.signal });
     clearTimeout(timer);
-
     serverReachabilityCache.set(clean, { ok: true, timestamp: Date.now() });
     return true;
   } catch (err: any) {
-    // If aborted due to slow timeout, don't prematurely kill the server on slow mobile networks
     if (err?.name === 'AbortError') {
       serverReachabilityCache.set(clean, { ok: true, timestamp: Date.now() });
       return true;
@@ -310,7 +304,6 @@ export async function probeServerReachable(url?: string | null, timeoutMs = 1200
   }
 }
 
-// Helper to reliably map Server 1 (Abyss), Server 2 (FileMoon), Server 3 (VDOHide)
 export function resolveEpisodeServers(data: any): { server1: string; server2: string; server3: string } {
   if (!data) return { server1: '', server2: '', server3: '' };
 
@@ -326,27 +319,23 @@ export function resolveEpisodeServers(data: any): { server1: string; server2: st
     s3 = s2;
     s2 = '';
   }
-
   if (!s2 && (data.videoUrl?.includes('filemoon') || data.video_url?.includes('filemoon'))) {
     s2 = extractFileMoonUrl(data.videoUrl || data.video_url);
   }
-  const isVdoUrl = (u?: string) => u && (u.includes('vdohide') || u.includes('streamhide') || u.includes('vidhide') || u.includes('fembed'));
+  const isVdoUrl = (u?: string) =>
+    u && (u.includes('vdohide') || u.includes('streamhide') || u.includes('vidhide') || u.includes('fembed'));
   if (!s3 && (isVdoUrl(data.videoUrl) || isVdoUrl(data.video_url))) {
     s3 = extractVDOHideUrl(data.videoUrl || data.video_url);
   }
-
-  // Fallback to videoUrl / video_url if s1 is empty and it's not filemoon or vdohide
   if (!s1 && (data.videoUrl || data.video_url)) {
     const fallbackUrl = extractAbyssUrl(data.videoUrl || data.video_url);
-    if (!fallbackUrl.includes('filemoon') && !isVdoUrl(fallbackUrl)) {
-      s1 = fallbackUrl;
-    }
+    if (!fallbackUrl.includes('filemoon') && !isVdoUrl(fallbackUrl)) s1 = fallbackUrl;
   }
 
-  return { 
-    server1: isValidStreamUrl(s1) ? s1 : '', 
-    server2: isValidStreamUrl(s2) ? s2 : '', 
-    server3: isValidStreamUrl(s3) ? s3 : '' 
+  return {
+    server1: isValidStreamUrl(s1) ? s1 : '',
+    server2: isValidStreamUrl(s2) ? s2 : '',
+    server3: isValidStreamUrl(s3) ? s3 : '',
   };
 }
 
@@ -354,23 +343,26 @@ export function normalizeAnime(item: any, id?: string): AnimeItem {
   const genres = Array.isArray(item.genres)
     ? item.genres
     : typeof item.genres === 'string'
-    ? item.genres.split(',').map((g: string) => g.trim()).filter(Boolean)
+    ? item.genres
+        .split(',')
+        .map((g: string) => g.trim())
+        .filter(Boolean)
     : [];
 
   const isMovie = Boolean(
-    item.type === 'Movie' || 
-    item.contentType === 'Movie' || 
-    item.content_type === 'Movie' || 
-    item.is_movie || 
-    item.isMovie
+    item.type === 'Movie' ||
+      item.contentType === 'Movie' ||
+      item.content_type === 'Movie' ||
+      item.is_movie ||
+      item.isMovie
   );
 
-  const poster = resolveImageUrl(item.poster_url || item.posterUrl || '');
-  const banner = resolveImageUrl(item.banner_url || item.bannerUrl || poster);
+  const poster = resolveImageUrl(item.posterUrl || item.poster_url || '');
+  const banner = resolveImageUrl(item.bannerUrl || item.banner_url || poster);
 
   return {
     ...item,
-    id: String(id || item.id),
+    id: String(id || item.id || ''),
     title: item.title || 'Untitled Anime',
     description: item.description || item.synopsis || '',
     synopsis: item.synopsis || item.description || '',
@@ -384,6 +376,7 @@ export function normalizeAnime(item: any, id?: string): AnimeItem {
     rating: item.rating || '9.5',
     status: item.status || 'Ongoing',
     language: item.language || 'Hindi Dub',
+    studio: item.studio || '',
     dubbedBy: item.dubbedBy || item.dubbed_by || 'ZK Dubbing Studio',
     featured: Boolean(item.featured),
     trending: Boolean(item.trending),
@@ -397,19 +390,44 @@ export function normalizeAnime(item: any, id?: string): AnimeItem {
     server1Url: item.server1Url || item.server1_url || item.abyssUrl || item.abyss_url || '',
     server2Url: item.server2Url || item.server2_url || item.filemoonUrl || item.filemoon_url || '',
     server3Url: item.server3Url || item.server3_url || item.vdohideUrl || item.vdohide_url || '',
+    createdAt: item.createdAt || item.created_at || Date.now(),
     created_at: item.created_at || item.createdAt || new Date().toISOString(),
   };
 }
 
+export function normalizeSeasonDoc(dId: string, raw: any, anime?: AnimeItem | null): SeasonItem {
+  const sNum = Number(raw.seasonNumber || raw.season_number || 1);
+  const poster = resolveImageUrl(raw.posterUrl || raw.poster_url || anime?.posterUrl || '');
+  const banner = resolveImageUrl(raw.bannerUrl || raw.banner_url || anime?.bannerUrl || poster);
+  return {
+    ...raw,
+    id: String(dId),
+    animeId: String(raw.animeId || raw.anime_id || anime?.id || ''),
+    anime_id: String(raw.animeId || raw.anime_id || anime?.id || ''),
+    seasonNumber: sNum,
+    season_number: sNum,
+    title: raw.title || `Season ${sNum}`,
+    description: raw.description || '',
+    posterUrl: poster,
+    poster_url: poster,
+    bannerUrl: banner,
+    banner_url: banner,
+    order: Number(raw.order ?? sNum),
+    status: raw.status || 'Published',
+    createdAt: raw.createdAt || raw.created_at || Date.now(),
+  };
+}
+
 export function normalizeEpisodeDoc(
-  dId: string, 
-  data: any, 
+  dId: string,
+  data: any,
   animeIdFallbackOrJoinedAnime?: any,
   joinedSeasonParam?: any
 ): EpisodeItem {
   const { server1, server2, server3 } = resolveEpisodeServers(data);
   const rawSeason = data.seasonId || data.season_id;
-  const epSeason = (rawSeason && rawSeason !== 's1' && rawSeason !== 'null' && rawSeason !== 'undefined') ? String(rawSeason) : '';
+  const epSeason =
+    rawSeason && rawSeason !== 's1' && rawSeason !== 'null' && rawSeason !== 'undefined' ? String(rawSeason) : '';
   let epSeasonNum = Number(data.seasonNumber || data.season_number);
   if (!epSeasonNum || isNaN(epSeasonNum)) {
     if (epSeason === 's2' || epSeason === '2' || epSeason === 'season 2') epSeasonNum = 2;
@@ -419,15 +437,19 @@ export function normalizeEpisodeDoc(
   const epNum = Number(data.episodeNumber || data.episode_number) || 1;
   const isMovie = Boolean(data.isMovie || data.type === 'Movie' || epSeason === 'movie');
 
-  // Handle joined anime & season (Requirement 3: Join episodes with anime and seasons using anime_id and season_id)
-  const animeObj = data.anime || (typeof animeIdFallbackOrJoinedAnime === 'object' ? animeIdFallbackOrJoinedAnime : null);
+  const animeObj =
+    data.anime || (typeof animeIdFallbackOrJoinedAnime === 'object' ? animeIdFallbackOrJoinedAnime : null);
   const seasonObj = data.seasons || data.season || joinedSeasonParam || null;
   const fallbackAnimeId = typeof animeIdFallbackOrJoinedAnime === 'string' ? animeIdFallbackOrJoinedAnime : '';
 
   const animeTitle = animeObj?.title || data.anime_title || data.animeTitle || '';
-  const rawAnimePoster = resolveImageUrl(animeObj?.poster_url || animeObj?.posterUrl || data.poster_url || data.posterUrl || '');
-  const rawAnimeBanner = resolveImageUrl(animeObj?.banner_url || animeObj?.bannerUrl || data.banner_url || data.bannerUrl || rawAnimePoster);
-  const rawEpThumb = resolveImageUrl(data.thumbnail_url || data.thumbnailUrl || rawAnimePoster);
+  const rawAnimePoster = resolveImageUrl(
+    animeObj?.posterUrl || animeObj?.poster_url || data.posterUrl || data.poster_url || ''
+  );
+  const rawAnimeBanner = resolveImageUrl(
+    animeObj?.bannerUrl || animeObj?.banner_url || data.bannerUrl || data.banner_url || rawAnimePoster
+  );
+  const rawEpThumb = resolveImageUrl(data.thumbnailUrl || data.thumbnail_url || rawAnimePoster);
 
   const animePoster = rawAnimePoster || rawEpThumb;
   const animeBanner = rawAnimeBanner || animePoster;
@@ -441,7 +463,7 @@ export function normalizeEpisodeDoc(
     animeId: String(data.animeId || data.anime_id || animeObj?.id || fallbackAnimeId || ''),
     anime_id: String(data.animeId || data.anime_id || animeObj?.id || fallbackAnimeId || ''),
     seasonId: epSeason || (seasonObj?.id ? String(seasonObj.id) : ''),
-    season_id: epSeason || (seasonObj?.id ? String(seasonObj.id) : null),
+    season_id: epSeason || (seasonObj?.id ? String(seasonObj.id) : ''),
     seasonNumber: epSeasonNum,
     season_number: epSeasonNum,
     episodeNumber: epNum,
@@ -487,8 +509,11 @@ export function normalizeEpisodeDoc(
 
 const inMemoryBackups: BackupRecord[] = [];
 
-// Automatic backup creation before any write/update/delete operation
-export async function createAutoBackup(type: 'anime' | 'season' | 'episode' | 'bulk', entityId: string, currentData: any): Promise<void> {
+export async function createAutoBackup(
+  type: 'anime' | 'season' | 'episode' | 'bulk',
+  entityId: string,
+  currentData: any
+): Promise<void> {
   try {
     const backupObj: BackupRecord = {
       id: `bak_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -497,61 +522,25 @@ export async function createAutoBackup(type: 'anime' | 'season' | 'episode' | 'b
       data: currentData,
       timestamp: Date.now(),
     };
-
-    // 1. Keep in-memory backup reference without exhausting localStorage quota
     inMemoryBackups.unshift(backupObj);
     if (inMemoryBackups.length > 30) inMemoryBackups.pop();
-
-    // 2. Save in Supabase backups table
-    await supabase.from('backups').insert({
-      backup_type: type,
-      entity_id: entityId,
-      data: currentData,
-      created_at: new Date().toISOString(),
-    });
-  } catch {
-    // ignore backup error
-  }
+  } catch {}
 }
 
-// -------------------------------------------------------------
-// DYNAMIC TABLE DETECTION & RESOLUTION (Requirement 1, 2, 7)
-// -------------------------------------------------------------
-
-// Standard Supabase public tables (Requirement 2 & 5)
 export const ANIME_TABLE_CANDIDATES = ['anime'];
 export const EPISODES_TABLE_CANDIDATES = ['episodes'];
 export const SEASONS_TABLE_CANDIDATES = ['seasons'];
 
-let activeAnimeTable: string = 'anime';
-let activeEpisodesTable: string = 'episodes';
-let activeSeasonsTable: string = 'seasons';
-
-// Kept for backward compatibility - returns empty array (Requirement 5: No mock data or localStorage)
 export function getLocalAnimeList(): AnimeItem[] {
   return [];
 }
-
 export function saveLocalAnimeItem(_item: any): void {}
-
 export function deleteLocalAnimeItem(_id: string): void {}
-
-export function isSchemaCachePending(error: any): boolean {
-  if (!error) return false;
-  return error.code === 'PGRST205' || (typeof error.message === 'string' && error.message.includes('schema cache'));
+export function isSchemaCachePending(_error: any): boolean {
+  return false;
 }
 
-/**
- * Standard table names in Supabase (Requirement 2)
- */
-export async function detectActualTableNames(_force = false): Promise<{
-  anime: string;
-  episodes: string;
-  seasons: string;
-  animeExists: boolean;
-  episodesExists: boolean;
-  seasonsExists: boolean;
-}> {
+export async function detectActualTableNames(_force = false) {
   return {
     anime: 'anime',
     episodes: 'episodes',
@@ -565,66 +554,15 @@ export async function detectActualTableNames(_force = false): Promise<{
 export async function getActiveAnimeTable(): Promise<string> {
   return 'anime';
 }
-
 export async function getActiveEpisodesTable(): Promise<string> {
   return 'episodes';
 }
-
 export async function getActiveSeasonsTable(): Promise<string> {
   return 'seasons';
 }
 
-/**
- * Trigger Auto Migration via Server (Requirement 3 & 4)
- */
-export async function triggerAutoMigration(credentials?: { dbPassword?: string; connectionString?: string }): Promise<{
-  success: boolean;
-  message: string;
-  sql?: string;
-  dashboardUrl?: string;
-}> {
-  try {
-    const res = await fetch('/api/supabase/migrate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(credentials || {}),
-    });
-    const data = await res.json();
-    if (data.success) {
-      await detectActualTableNames(true);
-      return { success: true, message: data.message };
-    }
-    return {
-      success: false,
-      message: data.message || 'Auto-migration could not connect directly',
-      sql: data.sql,
-      dashboardUrl: data.dashboardUrl,
-    };
-  } catch (err: any) {
-    return { success: false, message: err?.message || 'Failed to call migration endpoint' };
-  }
-}
-
-/**
- * Refresh Supabase Schema Cache (Requirement 4)
- */
-export async function refreshSupabaseSchemaCache(): Promise<{ success: boolean; message: string }> {
-  try {
-    const res = await fetch('/api/supabase/reload-schema', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    const data = await res.json();
-    await detectActualTableNames(true);
-    return { success: data.success, message: data.message };
-  } catch (err: any) {
-    await detectActualTableNames(true);
-    return { success: true, message: 'Schema detector refreshed.' };
-  }
-}
-
 // -------------------------------------------------------------
-// READ OPERATIONS (SUPABASE ONLY - ALL READ FROM DETECTED TABLE)
+// READ OPERATIONS (CLOUD FIRESTORE ONLY + 5-MIN CACHE)
 // -------------------------------------------------------------
 
 export interface UnifiedCatalog {
@@ -636,32 +574,25 @@ export interface UnifiedCatalog {
   allEpisodes: EpisodeItem[];
 }
 
-/**
- * Preload only the first 6 home page images (Requirement 7)
- */
 export function preloadFirst6HomeImages(catalog: UnifiedCatalog) {
   if (typeof window === 'undefined') return;
-
   const urls: string[] = [];
-  
-  // 1. Featured hero images (first 2)
+
   if (catalog.featuredAnime.length > 0) {
-    catalog.featuredAnime.slice(0, 2).forEach(a => {
-      const url = a.banner_url || a.poster_url;
+    catalog.featuredAnime.slice(0, 2).forEach((a) => {
+      const url = a.bannerUrl || a.posterUrl;
       if (url && !urls.includes(url)) urls.push(url);
     });
   }
 
-  // 2. New drops / trending posters to fill up to 6 images
   const pool = [...catalog.trendingAnime, ...catalog.allAnime];
   for (const a of pool) {
     if (urls.length >= 6) break;
-    const url = a.poster_url || a.banner_url;
+    const url = a.posterUrl || a.bannerUrl;
     if (url && !urls.includes(url)) urls.push(url);
   }
 
-  // Preload only the first 6
-  urls.slice(0, 6).forEach(url => {
+  urls.slice(0, 6).forEach((url) => {
     try {
       const link = document.createElement('link');
       link.rel = 'preload';
@@ -672,11 +603,6 @@ export function preloadFirst6HomeImages(catalog: UnifiedCatalog) {
   });
 }
 
-/**
- * Requirement 5: Reduce database requests.
- * Load anime, seasons and episodes using a SINGLE optimized query instead of multiple requests.
- * Requirement 6: Cache API responses for 5 minutes.
- */
 export async function getUnifiedCatalog(): Promise<UnifiedCatalog> {
   const cacheKey = 'unified_app_catalog';
   const cached = getCachedData<UnifiedCatalog>(cacheKey);
@@ -684,72 +610,64 @@ export async function getUnifiedCatalog(): Promise<UnifiedCatalog> {
     return cached;
   }
 
+  if (!db) {
+    return {
+      allAnime: [],
+      featuredAnime: [],
+      trendingAnime: [],
+      newDrops: [],
+      allSeasons: [],
+      allEpisodes: [],
+    };
+  }
+
   try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('anime')
-        .select('*, seasons(*), episodes(*)')
-        .order('created_at', { ascending: false });
-    });
+    const [animeSnap, seasonsSnap, episodesSnap] = await Promise.all([
+      getDocs(collection(db, 'anime')),
+      getDocs(collection(db, 'seasons')),
+      getDocs(query(collection(db, 'episodes'), where('published', '==', true))),
+    ]);
 
-    if (res?.error) {
-      console.error('[Supabase Real Error - getUnifiedCatalog]:', formatDbError(res.error));
-      throw new Error(formatDbError(res.error));
-    }
+    const allAnime: AnimeItem[] = animeSnap.docs
+      .map((d) => normalizeAnime(d.data(), d.id))
+      .sort((a, b) => getPublishTimestamp(b) - getPublishTimestamp(a));
 
-    const data = res?.data || [];
-    const allAnime: AnimeItem[] = [];
-    const allSeasons: SeasonItem[] = [];
-    const allEpisodes: EpisodeItem[] = [];
+    const animeMap = new Map<string, AnimeItem>();
+    allAnime.forEach((a) => animeMap.set(a.id, a));
 
-    data.forEach((rawAnime: any) => {
-      const animeItem = normalizeAnime(rawAnime);
-      allAnime.push(animeItem);
+    const allSeasons: SeasonItem[] = seasonsSnap.docs
+      .map((d) => {
+        const raw = d.data();
+        const aId = String(raw.animeId || raw.anime_id || '');
+        return normalizeSeasonDoc(d.id, raw, animeMap.get(aId) || null);
+      })
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
 
-      if (Array.isArray(rawAnime.seasons)) {
-        rawAnime.seasons.forEach((rawSeason: any) => {
-          allSeasons.push({
-            ...rawSeason,
-            id: String(rawSeason.id),
-            animeId: String(animeItem.id),
-            seasonNumber: Number(rawSeason.season_number || rawSeason.seasonNumber || 1),
-            title: rawSeason.title || `Season ${rawSeason.season_number || 1}`,
-            bannerUrl: resolveImageUrl(rawSeason.banner_url || rawSeason.bannerUrl || animeItem.banner_url || ''),
-            banner_url: resolveImageUrl(rawSeason.banner_url || rawSeason.bannerUrl || animeItem.banner_url || ''),
-            posterUrl: resolveImageUrl(rawSeason.poster_url || rawSeason.posterUrl || animeItem.poster_url || ''),
-            poster_url: resolveImageUrl(rawSeason.poster_url || rawSeason.posterUrl || animeItem.poster_url || ''),
-            order: Number(rawSeason.order ?? (rawSeason.season_number || 1)),
-          });
-        });
-      }
+    const seasonMap = new Map<string, SeasonItem>();
+    allSeasons.forEach((s) => seasonMap.set(s.id, s));
 
-      if (Array.isArray(rawAnime.episodes)) {
-        rawAnime.episodes.forEach((rawEp: any) => {
-          const matchedSeason = Array.isArray(rawAnime.seasons)
-            ? rawAnime.seasons.find((s: any) => s.id === rawEp.season_id)
-            : null;
-          const normalizedEp = normalizeEpisodeDoc(rawEp.id, rawEp, animeItem, matchedSeason);
-          allEpisodes.push(normalizedEp);
-        });
-      }
-    });
+    const allEpisodes: EpisodeItem[] = episodesSnap.docs
+      .map((d) => {
+        const raw = d.data();
+        const aId = String(raw.animeId || raw.anime_id || '');
+        const sId = String(raw.seasonId || raw.season_id || '');
+        return normalizeEpisodeDoc(d.id, raw, animeMap.get(aId) || aId, seasonMap.get(sId) || null);
+      })
+      .sort((a, b) => getPublishTimestamp(b) - getPublishTimestamp(a));
 
-    // Extract featured
-    let feat = allAnime.filter(a => a.featured);
+    let feat = allAnime.filter((a) => a.featured);
     if (feat.length === 0 && allAnime.length > 0) {
       feat = allAnime.slice(0, 6);
     }
 
-    // Extract trending
-    let trend = allAnime.filter(a => a.trending);
+    let trend = allAnime.filter((a) => a.trending);
     if (trend.length === 0 && allAnime.length > 0) {
       trend = [...allAnime].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 10);
     }
 
-    // Extract new drops (sorted by created_at desc)
     const newDrops = [...allEpisodes]
-      .filter(ep => ep.published !== false)
-      .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+      .filter((ep) => ep.published !== false)
+      .sort((a, b) => getPublishTimestamp(b) - getPublishTimestamp(a))
       .slice(0, 40);
 
     const catalog: UnifiedCatalog = {
@@ -761,83 +679,21 @@ export async function getUnifiedCatalog(): Promise<UnifiedCatalog> {
       allEpisodes,
     };
 
-    // Cache the whole catalog for 5 minutes (Requirement 6)
     setCachedData(cacheKey, catalog);
-    // Also warm individual cache keys for instant hits across other components (Requirement 4)
     setCachedData('all_anime', allAnime);
     setCachedData('featured_anime', feat);
     setCachedData('trending_anime', trend);
     setCachedData('new_drops', newDrops);
     setCachedData('all_seasons', allSeasons);
-    setCachedData('all_episodes', allEpisodes);
-    allAnime.forEach(a => setCachedData(`anime_${a.id}`, a));
-    allEpisodes.forEach(ep => setCachedData(`episode_${ep.id}`, ep));
+    setCachedData('all_episodes_published', allEpisodes);
+    allAnime.forEach((a) => setCachedData(`anime_${a.id}`, a));
+    allEpisodes.forEach((ep) => setCachedData(`episode_${ep.id}`, ep));
 
     return catalog;
-  } catch (err: any) {
-    console.warn('[Supabase getUnifiedCatalog join notice, switching to parallel query fallback]:', formatDbError(err));
-
-    try {
-      const [animeRes, seasonsRes, epsRes] = await Promise.allSettled([
-        executeSupabaseWithRetry(() => supabase.from('anime').select('*').order('created_at', { ascending: false })),
-        executeSupabaseWithRetry(() => supabase.from('seasons').select('*')),
-        executeSupabaseWithRetry(() => supabase.from('episodes').select('*').order('created_at', { ascending: false })),
-      ]);
-
-      const rawAnime = animeRes.status === 'fulfilled' && (animeRes.value as any)?.data ? (animeRes.value as any).data : [];
-      const rawSeasons = seasonsRes.status === 'fulfilled' && (seasonsRes.value as any)?.data ? (seasonsRes.value as any).data : [];
-      const rawEps = epsRes.status === 'fulfilled' && (epsRes.value as any)?.data ? (epsRes.value as any).data : [];
-
-      if (rawAnime.length > 0 || rawEps.length > 0) {
-        const allAnime: AnimeItem[] = rawAnime.map((a: any) => normalizeAnime(a));
-        const allSeasons: SeasonItem[] = rawSeasons.map((s: any) => ({
-          ...s,
-          id: String(s.id),
-          animeId: String(s.anime_id || s.animeId || ''),
-          seasonNumber: Number(s.season_number || s.seasonNumber || 1),
-          title: s.title || `Season ${s.season_number || 1}`,
-          bannerUrl: resolveImageUrl(s.banner_url || s.bannerUrl || ''),
-          banner_url: resolveImageUrl(s.banner_url || s.bannerUrl || ''),
-          posterUrl: resolveImageUrl(s.poster_url || s.posterUrl || ''),
-          poster_url: resolveImageUrl(s.poster_url || s.posterUrl || ''),
-          order: Number(s.order ?? (s.season_number || 1)),
-        }));
-        const allEpisodes: EpisodeItem[] = rawEps.map((e: any) => {
-          const matchedAnime = allAnime.find(a => a.id === (e.anime_id || e.animeId));
-          const matchedSeason = allSeasons.find(s => s.id === (e.season_id || e.seasonId));
-          return normalizeEpisodeDoc(e.id, e, matchedAnime, matchedSeason);
-        });
-
-        let feat = allAnime.filter(a => a.featured);
-        if (feat.length === 0 && allAnime.length > 0) feat = allAnime.slice(0, 6);
-
-        let trend = allAnime.filter(a => a.trending);
-        if (trend.length === 0 && allAnime.length > 0) {
-          trend = [...allAnime].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 10);
-        }
-
-        const newDrops = [...allEpisodes]
-          .filter(ep => ep.published !== false)
-          .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
-          .slice(0, 40);
-
-        const catalog: UnifiedCatalog = {
-          allAnime,
-          featuredAnime: feat,
-          trendingAnime: trend,
-          newDrops,
-          allSeasons,
-          allEpisodes,
-        };
-
-        setCachedData(cacheKey, catalog);
-        return catalog;
-      }
-    } catch (fallbackErr: any) {
-      console.error('[Supabase parallel query fallback error]:', formatDbError(fallbackErr));
-    }
-
-    if (cached) return cached;
+  } catch (err) {
+    console.error('[Firestore Error - getUnifiedCatalog]:', formatDbError(err));
+    const stale = getCachedData<UnifiedCatalog>(cacheKey, true);
+    if (stale) return stale;
     return {
       allAnime: [],
       featuredAnime: [],
@@ -849,259 +705,109 @@ export async function getUnifiedCatalog(): Promise<UnifiedCatalog> {
   }
 }
 
-// 1. Featured Anime (Supabase Only - Requirement 7)
 export async function getFeaturedAnime(): Promise<AnimeItem[]> {
   const cacheKey = 'featured_anime';
   const cached = getCachedData<AnimeItem[]>(cacheKey);
+  if (cached && cached.length > 0) return cached;
 
-  try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('anime')
-        .select('*')
-        .eq('featured', true)
-        .order('created_at', { ascending: false })
-        .limit(8);
-    });
-
-    if (res?.data && res.data.length > 0) {
-      const items = res.data.map((item: any) => normalizeAnime(item));
-      setCachedData(cacheKey, items);
-      return items;
-    }
-
-    // Fallback: latest 6 anime from Supabase if no explicit featured flag
-    const resAll = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('anime')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(6);
-    });
-
-    if (resAll?.data && resAll.data.length > 0) {
-      const items = resAll.data.map((item: any) => normalizeAnime(item));
-      setCachedData(cacheKey, items);
-      return items;
-    }
-
-    if (cached && cached.length > 0) return cached;
-    return [];
-  } catch (err: any) {
-    console.error('[Supabase Real Error - getFeaturedAnime]:', formatDbError(err));
-    if (cached && cached.length > 0) return cached;
-    const stale = getCachedData<AnimeItem[]>(cacheKey, true);
-    if (stale && stale.length > 0) return stale;
-    return [];
-  }
+  const catalog = await getUnifiedCatalog();
+  return catalog.featuredAnime;
 }
 
-// 2. Trending Anime (Supabase Only - Requirement 7)
 export async function getTrendingAnime(): Promise<AnimeItem[]> {
   const cacheKey = 'trending_anime';
   const cached = getCachedData<AnimeItem[]>(cacheKey);
+  if (cached && cached.length > 0) return cached;
 
-  try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('anime')
-        .select('*')
-        .eq('trending', true)
-        .order('views', { ascending: false })
-        .limit(10);
-    });
-
-    if (res?.data && res.data.length > 0) {
-      const items = res.data.map((item: any) => normalizeAnime(item));
-      setCachedData(cacheKey, items);
-      return items;
-    }
-
-    // Fallback: order by views in Supabase
-    const resAll = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('anime')
-        .select('*')
-        .order('views', { ascending: false })
-        .limit(10);
-    });
-
-    if (resAll?.data && resAll.data.length > 0) {
-      const items = resAll.data.map((item: any) => normalizeAnime(item));
-      setCachedData(cacheKey, items);
-      return items;
-    }
-
-    if (cached && cached.length > 0) return cached;
-    return [];
-  } catch (err: any) {
-    console.error('[Supabase Real Error - getTrendingAnime]:', formatDbError(err));
-    if (cached && cached.length > 0) return cached;
-    const stale = getCachedData<AnimeItem[]>(cacheKey, true);
-    if (stale && stale.length > 0) return stale;
-    return [];
-  }
+  const catalog = await getUnifiedCatalog();
+  return catalog.trendingAnime;
 }
 
-// 3. New Drops (Supabase Only - Joined with Anime & Seasons, Relational PostgREST Query)
 export async function getNewDrops(): Promise<any[]> {
   const cacheKey = 'new_drops';
   const cached = getCachedData<any[]>(cacheKey);
+  if (cached && cached.length > 0) return cached;
+
+  const catalog = await getUnifiedCatalog();
   const now = Date.now();
-
-  try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('episodes')
-        .select('*, anime(*), seasons(*)')
-        .eq('published', true)
-        .order('created_at', { ascending: false })
-        .limit(60);
-    });
-
-    if (res?.error) {
-      console.error('[Supabase Real Error - getNewDrops]:', formatDbError(res.error));
-      throw new Error(formatDbError(res.error));
-    }
-
-    if (res?.data && res.data.length > 0) {
-      const activeDrops = res.data
-        .map((ep: any) => {
-          const animeObj = ep.anime;
-          const parentAnimeId = String(animeObj?.id || ep.anime_id || ep.animeId || '');
-          const publishTs = getPublishTimestamp(ep);
-          // Only expire if timestamp is strictly valid AND older than 17 days
-          const isExpired = publishTs > 0 ? (now - publishTs) > NEW_DROPS_EXPIRY_MS : false;
-
-          return {
-            ...normalizeEpisodeDoc(ep.id, ep, animeObj, ep.seasons),
-            id: parentAnimeId || ep.id,
-            animeId: parentAnimeId,
-            anime_id: parentAnimeId,
-            dropId: ep.id,
-            episodeId: ep.id,
-            title: animeObj?.title || ep.episode_title || 'Anime Series',
-            animeTitle: animeObj?.title || ep.episode_title || 'Anime Series',
-            episodeTitle: ep.episode_title || ep.title || (ep.episode_number ? `Episode ${ep.episode_number}` : 'Episode 1'),
-            posterUrl: (animeObj?.poster_url || animeObj?.posterUrl || ep.thumbnail_url || ep.thumbnailUrl || '').trim(),
-            poster_url: (animeObj?.poster_url || animeObj?.posterUrl || ep.thumbnail_url || ep.thumbnailUrl || '').trim(),
-            thumbnailUrl: (ep.thumbnail_url || ep.thumbnailUrl || animeObj?.poster_url || '').trim(),
-            thumbnail_url: (ep.thumbnail_url || ep.thumbnailUrl || animeObj?.poster_url || '').trim(),
-            bannerUrl: (animeObj?.banner_url || animeObj?.bannerUrl || animeObj?.poster_url || '').trim(),
-            banner_url: (animeObj?.banner_url || animeObj?.bannerUrl || animeObj?.poster_url || '').trim(),
-            genres: Array.isArray(animeObj?.genres) ? animeObj.genres : [],
-            animeGenres: Array.isArray(animeObj?.genres) ? animeObj.genres : [],
-            contentType: animeObj?.content_type || animeObj?.type || 'TV Series',
-            type: animeObj?.type || animeObj?.content_type || 'TV Series',
-            releaseYear: animeObj?.release_year,
-            release_year: animeObj?.release_year,
-            publishTs,
-            isExpired,
-          };
-        })
-        .filter((d: any) => !d.isExpired);
-
-      if (activeDrops.length > 0) {
-        setCachedData(cacheKey, activeDrops);
-      }
-      return activeDrops;
-    }
-
-    if (cached && cached.length > 0) return cached;
-    return [];
-  } catch (err: any) {
-    console.error('[Supabase Real Error - getNewDrops exception]:', formatDbError(err));
-    if (cached && cached.length > 0) return cached;
-    const stale = getCachedData<any[]>(cacheKey, true);
-    if (stale && stale.length > 0) return stale;
-    return [];
-  }
+  return catalog.newDrops
+    .map((ep) => {
+      const animeObj = ep.anime;
+      const parentAnimeId = String(animeObj?.id || ep.animeId || ep.anime_id || '');
+      const publishTs = getPublishTimestamp(ep);
+      const isExpired = publishTs > 0 ? now - publishTs > NEW_DROPS_EXPIRY_MS : false;
+      return {
+        ...ep,
+        id: parentAnimeId || ep.id,
+        animeId: parentAnimeId,
+        anime_id: parentAnimeId,
+        dropId: ep.id,
+        episodeId: ep.id,
+        title: animeObj?.title || ep.title || 'Anime Series',
+        animeTitle: animeObj?.title || ep.title || 'Anime Series',
+        episodeTitle: ep.episode_title || ep.title || `Episode ${ep.episodeNumber || 1}`,
+        posterUrl: animeObj?.posterUrl || ep.thumbnailUrl || '',
+        poster_url: animeObj?.posterUrl || ep.thumbnailUrl || '',
+        thumbnailUrl: ep.thumbnailUrl || animeObj?.posterUrl || '',
+        thumbnail_url: ep.thumbnailUrl || animeObj?.posterUrl || '',
+        bannerUrl: animeObj?.bannerUrl || animeObj?.posterUrl || '',
+        banner_url: animeObj?.bannerUrl || animeObj?.posterUrl || '',
+        genres: Array.isArray(animeObj?.genres) ? animeObj.genres : [],
+        animeGenres: Array.isArray(animeObj?.genres) ? animeObj.genres : [],
+        contentType: animeObj?.contentType || animeObj?.type || 'TV Series',
+        type: animeObj?.type || animeObj?.contentType || 'TV Series',
+        releaseYear: animeObj?.releaseYear,
+        release_year: animeObj?.releaseYear,
+        publishTs,
+        isExpired,
+      };
+    })
+    .filter((d) => !d.isExpired);
 }
 
-// 4. Get Anime by ID (Supabase Only - Requirement 7)
 export async function getAnimeById(id: string): Promise<AnimeItem | null> {
   if (!id) return null;
   const cacheKey = `anime_${id}`;
   const cached = getCachedData<AnimeItem>(cacheKey);
+  if (cached) return cached;
+  if (!db) return null;
 
   try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('anime')
-        .select('*')
-        .eq('id', id)
-        .maybeSingle();
-    });
-
-    if (res?.data) {
-      const normalized = normalizeAnime(res.data, res.data.id);
+    const snap = await getDoc(doc(db, 'anime', id));
+    if (snap.exists()) {
+      const normalized = normalizeAnime(snap.data(), snap.id);
       setCachedData(cacheKey, normalized);
-      setCachedData(`anime_${normalized.id}`, normalized);
       return normalized;
     }
 
-    // Try case-insensitive title lookup
-    const resTitle = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('anime')
-        .select('*')
-        .ilike('title', id)
-        .maybeSingle();
-    });
-
-    if (resTitle?.data) {
-      const normalized = normalizeAnime(resTitle.data, resTitle.data.id);
-      setCachedData(cacheKey, normalized);
-      setCachedData(`anime_${normalized.id}`, normalized);
-      return normalized;
+    // Fallback: match by catalog title or parent ID from episode/season
+    const allAnime = await getAllAnime();
+    const byTitle = allAnime.find((a) => a.title.toLowerCase() === id.toLowerCase());
+    if (byTitle) {
+      setCachedData(cacheKey, byTitle);
+      return byTitle;
     }
 
-    // Defensive lookup: In case id is an episode ID, locate parent anime
-    try {
-      const epRes = await executeSupabaseWithRetry(async () => {
-        return await supabase
-          .from('episodes')
-          .select('anime_id')
-          .eq('id', id)
-          .maybeSingle();
-      });
-      if (epRes?.data?.anime_id) {
-        const parentAnime = await getAnimeById(epRes.data.anime_id);
-        if (parentAnime) return parentAnime;
-      }
-    } catch {}
+    const epSnap = await getDoc(doc(db, 'episodes', id)).catch(() => null);
+    if (epSnap?.exists()) {
+      const epData = epSnap.data();
+      const parentId = epData.animeId || epData.anime_id;
+      if (parentId) return await getAnimeById(String(parentId));
+    }
 
-    // Defensive lookup: In case id is a season ID, locate parent anime
-    try {
-      const seaRes = await executeSupabaseWithRetry(async () => {
-        return await supabase
-          .from('seasons')
-          .select('anime_id')
-          .eq('id', id)
-          .maybeSingle();
-      });
-      if (seaRes?.data?.anime_id) {
-        const parentAnime = await getAnimeById(seaRes.data.anime_id);
-        if (parentAnime) return parentAnime;
-      }
-    } catch {}
-
-    if (cached) return cached;
-    return null;
-  } catch (err: any) {
-    console.error(`[Supabase Real Error - getAnimeById(${id})]:`, formatDbError(err));
-    if (cached) return cached;
-    const stale = getCachedData<AnimeItem>(cacheKey, true);
-    if (stale) return stale;
-    return null;
+    const seaSnap = await getDoc(doc(db, 'seasons', id)).catch(() => null);
+    if (seaSnap?.exists()) {
+      const seaData = seaSnap.data();
+      const parentId = seaData.animeId || seaData.anime_id;
+      if (parentId) return await getAnimeById(String(parentId));
+    }
+  } catch (err) {
+    console.error(`[Firestore Error - getAnimeById(${id})]:`, formatDbError(err));
   }
+
+  return getCachedData<AnimeItem>(cacheKey, true) || null;
 }
 
-/**
- * Requirement 5: Reduce database requests.
- * Load anime, seasons and episodes using a SINGLE optimized query instead of multiple requests.
- * Requirement 6: Cache API responses for 5 minutes.
- */
 export async function getAnimeFullDetails(id: string): Promise<{
   anime: AnimeItem | null;
   seasons: SeasonItem[];
@@ -1115,174 +821,76 @@ export async function getAnimeFullDetails(id: string): Promise<{
     seasons: SeasonItem[];
     episodes: EpisodeItem[];
   }>(cacheKey);
+  if (cached && cached.anime) return cached;
 
-  if (cached && cached.anime) {
-    return cached;
+  const anime = await getAnimeById(id);
+  if (!anime) return { anime: null, seasons: [], episodes: [] };
+
+  const [seasonsData, episodesData] = await Promise.all([
+    getSeasonsByAnimeId(anime.id),
+    getEpisodesByAnimeId(anime.id),
+  ]);
+
+  let seasons = seasonsData;
+  if (seasons.length === 0 && episodesData.length > 0) {
+    seasons = [
+      {
+        id: 's1',
+        animeId: anime.id,
+        seasonNumber: 1,
+        title: 'Season 1',
+        order: 1,
+      },
+    ];
   }
 
-  try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('anime')
-        .select('*, seasons(*), episodes(*)')
-        .eq('id', id)
-        .maybeSingle();
-    });
+  const payload = {
+    anime,
+    seasons,
+    episodes: episodesData,
+  };
 
-    let raw = res?.data;
-    if (!raw) {
-      const titleRes = await executeSupabaseWithRetry(async () => {
-        return await supabase
-          .from('anime')
-          .select('*, seasons(*), episodes(*)')
-          .ilike('title', id)
-          .maybeSingle();
-      });
-      raw = titleRes?.data;
-    }
+  setCachedData(cacheKey, payload);
+  setCachedData(`anime_${anime.id}`, anime);
+  setCachedData(`seasons_${anime.id}`, seasons);
+  setCachedData(`episodes_${anime.id}`, episodesData);
 
-    if (raw) {
-      const anime = normalizeAnime(raw);
-      const rawSeasons: any[] = Array.isArray(raw.seasons) ? raw.seasons : [];
-      const rawEpisodes: any[] = Array.isArray(raw.episodes) ? raw.episodes : [];
-
-      let seasons: SeasonItem[] = rawSeasons
-        .map((s: any) => ({
-          ...s,
-          id: String(s.id),
-          animeId: String(anime.id),
-          seasonNumber: Number(s.season_number || s.seasonNumber || 1),
-          title: s.title || `Season ${s.season_number || 1}`,
-          bannerUrl: resolveImageUrl(s.banner_url || s.bannerUrl || anime.banner_url || ''),
-          banner_url: resolveImageUrl(s.banner_url || s.bannerUrl || anime.banner_url || ''),
-          posterUrl: resolveImageUrl(s.poster_url || s.posterUrl || anime.poster_url || ''),
-          poster_url: resolveImageUrl(s.poster_url || s.posterUrl || anime.poster_url || ''),
-          order: Number(s.order ?? (s.season_number || 1)),
-        }))
-        .sort((a, b) => (a.order || 0) - (b.order || 0));
-
-      if (seasons.length === 0 && rawEpisodes.length > 0) {
-        seasons = [
-          {
-            id: 's1',
-            animeId: anime.id,
-            seasonNumber: 1,
-            title: 'Season 1',
-            order: 1,
-          },
-        ];
-      }
-
-      const episodes: EpisodeItem[] = rawEpisodes
-        .filter((ep: any) => ep.published !== false)
-        .map((ep: any) => {
-          const matchedSeason = seasons.find((s) => s.id === ep.season_id);
-          return normalizeEpisodeDoc(ep.id, ep, anime, matchedSeason);
-        })
-        .sort((a, b) => Number(a.episodeNumber || 0) - Number(b.episodeNumber || 0));
-
-      const payload = { anime, seasons, episodes };
-      setCachedData(cacheKey, payload);
-      setCachedData(`anime_${anime.id}`, anime);
-      setCachedData(`seasons_${anime.id}`, seasons);
-      setCachedData(`episodes_${anime.id}`, episodes);
-      episodes.forEach(ep => setCachedData(`episode_${ep.id}`, ep));
-
-      return payload;
-    }
-  } catch (err: any) {
-    console.error(`[Supabase Real Error - getAnimeFullDetails(${id})]:`, formatDbError(err));
-  }
-
-  // Resilient fallback: Parallel fetch if nested join returned empty
-  try {
-    const [animeData, seasonsData, episodesData] = await Promise.all([
-      getAnimeById(id),
-      getSeasonsByAnimeId(id),
-      getEpisodesByAnimeId(id),
-    ]);
-
-    const fallbackPayload = {
-      anime: animeData,
-      seasons: seasonsData || [],
-      episodes: episodesData || [],
-    };
-    if (fallbackPayload.anime) {
-      setCachedData(cacheKey, fallbackPayload);
-    }
-    return fallbackPayload;
-  } catch {
-    return { anime: null, seasons: [], episodes: [] };
-  }
+  return payload;
 }
 
-// 5. Get Seasons by Anime ID (Supabase Only - Requirement 7)
 export async function getSeasonsByAnimeId(animeId: string): Promise<SeasonItem[]> {
   if (!animeId) return [];
   const cacheKey = `seasons_${animeId}`;
   const cached = getCachedData<SeasonItem[]>(cacheKey);
-  const seaTable = await getActiveSeasonsTable();
-  const epTable = await getActiveEpisodesTable();
+  if (cached && cached.length > 0) return cached;
+  if (!db) return [];
 
   try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from(seaTable)
-        .select('*')
-        .eq('anime_id', animeId)
-        .order('season_number', { ascending: true });
-    });
+    const snap = await getDocs(query(collection(db, 'seasons'), where('animeId', '==', animeId)));
+    const mapped = snap.docs
+      .map((d) => normalizeSeasonDoc(d.id, d.data()))
+      .sort((a, b) => (a.seasonNumber || 1) - (b.seasonNumber || 1));
 
-    if (res?.data && res.data.length > 0) {
-      const mapped = res.data.map((item: any) => ({
-        ...item,
-        id: String(item.id),
-        animeId: String(item.anime_id || item.animeId || animeId),
-        seasonNumber: Number(item.season_number || item.seasonNumber || 1),
-        title: item.title || `Season ${item.season_number || 1}`,
-        bannerUrl: resolveImageUrl(item.banner_url || item.bannerUrl),
-        banner_url: resolveImageUrl(item.banner_url || item.bannerUrl),
-        posterUrl: resolveImageUrl(item.poster_url || item.posterUrl),
-        poster_url: resolveImageUrl(item.poster_url || item.posterUrl),
-        order: Number(item.order ?? (item.season_number || 1)),
-      }));
+    if (mapped.length > 0) {
       setCachedData(cacheKey, mapped);
       return mapped;
     }
-  } catch {
-    // fallback below
-  }
 
-  // Synthesize Season 1 only if episodes exist in Supabase for this anime
-  try {
-    const { count } = await supabase
-      .from(epTable)
-      .select('id', { count: 'exact', head: true })
-      .eq('anime_id', animeId);
-
-    if (count && count > 0) {
-      const synth: SeasonItem[] = [{
-        id: 's1',
-        animeId,
-        seasonNumber: 1,
-        title: 'Season 1',
-        order: 1,
-      }];
+    const epsSnap = await getDocs(
+      query(collection(db, 'episodes'), where('animeId', '==', animeId), where('published', '==', true), limit(1))
+    );
+    if (!epsSnap.empty) {
+      const synth: SeasonItem[] = [{ id: 's1', animeId, seasonNumber: 1, title: 'Season 1', order: 1 }];
       setCachedData(cacheKey, synth);
       return synth;
     }
-  } catch {}
-
-  // Never return an empty array if cached data exists
-  const fallback = cached || getCachedData<SeasonItem[]>(cacheKey, true);
-  if (fallback && fallback.length > 0) {
-    return fallback;
+  } catch (err) {
+    console.warn(`[Firestore Error - getSeasonsByAnimeId(${animeId})]:`, formatDbError(err));
   }
 
-  return [];
+  return getCachedData<SeasonItem[]>(cacheKey, true) || [];
 }
 
-// Helper to match an episode to a target season
 export function matchEpisodeToSeason(
   ep: any,
   selectedSeasonId: string,
@@ -1292,25 +900,23 @@ export function matchEpisodeToSeason(
   if (!selectedSeasonId) return true;
 
   const selectedSeasonObj = seasons.find((s) => s.id === selectedSeasonId);
-  const targetSeasonNum = selectedSeasonObj?.seasonNumber != null 
-    ? Number(selectedSeasonObj.seasonNumber) 
-    : undefined;
+  const targetSeasonNum =
+    selectedSeasonObj?.seasonNumber != null ? Number(selectedSeasonObj.seasonNumber) : undefined;
 
   const epSeasonId = ep.seasonId || ep.season_id;
-  const epSeasonNum = (ep.seasonNumber != null && ep.seasonNumber !== '') 
-    ? Number(ep.seasonNumber) 
-    : (ep.season_number != null && ep.season_number !== '') 
-    ? Number(ep.season_number) 
-    : undefined;
+  const epSeasonNum =
+    ep.seasonNumber != null && ep.seasonNumber !== ''
+      ? Number(ep.seasonNumber)
+      : ep.season_number != null && ep.season_number !== ''
+      ? Number(ep.season_number)
+      : undefined;
 
-  if (epSeasonId && String(epSeasonId).trim() === String(selectedSeasonId).trim()) {
-    return true;
-  }
+  if (epSeasonId && String(epSeasonId).trim() === String(selectedSeasonId).trim()) return true;
   if (selectedSeasonObj?.id && epSeasonId && String(epSeasonId).trim() === String(selectedSeasonObj.id).trim()) {
     return true;
   }
-  if (epSeasonNum !== undefined && targetSeasonNum !== undefined) {
-    if (epSeasonNum === targetSeasonNum) return true;
+  if (epSeasonNum !== undefined && targetSeasonNum !== undefined && epSeasonNum === targetSeasonNum) {
+    return true;
   }
 
   if (targetSeasonNum !== undefined && epSeasonId) {
@@ -1327,10 +933,7 @@ export function matchEpisodeToSeason(
     }
   }
 
-  const isFirstSeason = selectedSeasonObj 
-    ? targetSeasonNum === 1 || seasons[0]?.id === selectedSeasonId 
-    : true;
-
+  const isFirstSeason = selectedSeasonObj ? targetSeasonNum === 1 || seasons[0]?.id === selectedSeasonId : true;
   if (isFirstSeason) {
     if (epSeasonNum !== undefined && targetSeasonNum !== undefined && epSeasonNum !== targetSeasonNum) {
       return false;
@@ -1354,317 +957,213 @@ export function matchEpisodeToSeason(
   return false;
 }
 
-// 6. Get Episodes by Anime ID (Supabase Only - Requirement 3 & 4: Joined with Anime & Seasons, Published Only)
 export async function getEpisodesByAnimeId(animeId: string, seasonId?: string): Promise<EpisodeItem[]> {
   if (!animeId) return [];
   const cacheKey = `episodes_${animeId}`;
   const cached = getCachedData<EpisodeItem[]>(cacheKey);
 
-  try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('episodes')
-        .select('*, anime(*), seasons(*)')
-        .eq('anime_id', animeId)
-        .eq('published', true)
-        .order('episode_number', { ascending: true });
-    });
+  let allEpisodes = cached;
+  if (!allEpisodes || allEpisodes.length === 0) {
+    if (!db) return [];
+    try {
+      const [anime, seasons, epsSnap] = await Promise.all([
+        getAnimeById(animeId),
+        getDocs(query(collection(db, 'seasons'), where('animeId', '==', animeId))),
+        getDocs(query(collection(db, 'episodes'), where('animeId', '==', animeId), where('published', '==', true))),
+      ]);
+      const seasonMap = new Map<string, SeasonItem>();
+      seasons.docs.forEach((s) => seasonMap.set(s.id, normalizeSeasonDoc(s.id, s.data(), anime)));
 
-    if (res?.error) {
-      console.error('[Supabase Real Error - getEpisodesByAnimeId]:', formatDbError(res.error));
-      throw new Error(formatDbError(res.error));
-    }
+      allEpisodes = epsSnap.docs
+        .map((d) => {
+          const raw = d.data();
+          const sId = String(raw.seasonId || raw.season_id || '');
+          return normalizeEpisodeDoc(d.id, raw, anime || animeId, seasonMap.get(sId) || null);
+        })
+        .sort((a, b) => Number(a.episodeNumber || 0) - Number(b.episodeNumber || 0));
 
-    if (res?.data && res.data.length > 0) {
-      const allEpisodes = res.data.map((ep: any) => normalizeEpisodeDoc(ep.id, ep, animeId));
       setCachedData(cacheKey, allEpisodes);
-
-      if (seasonId && seasonId !== 'all') {
-        return allEpisodes.filter((ep: any) => matchEpisodeToSeason(ep, seasonId));
-      }
-      return allEpisodes;
+    } catch (err) {
+      console.error(`[Firestore Error - getEpisodesByAnimeId(${animeId})]:`, formatDbError(err));
+      allEpisodes = getCachedData<EpisodeItem[]>(cacheKey, true) || [];
     }
-  } catch (err: any) {
-    console.error('[Supabase Real Error - getEpisodesByAnimeId exception]:', formatDbError(err));
   }
 
-  const fallback = cached || getCachedData<EpisodeItem[]>(cacheKey, true);
-  if (fallback && fallback.length > 0) {
-    if (seasonId && seasonId !== 'all') {
-      return fallback.filter((ep: any) => matchEpisodeToSeason(ep, seasonId));
-    }
-    return fallback;
+  if (seasonId && seasonId !== 'all') {
+    return allEpisodes.filter((ep) => matchEpisodeToSeason(ep, seasonId));
   }
-
-  return [];
+  return allEpisodes;
 }
 
-// 7. Get Episodes by Season (Requirement 3 & 4: Published Only Joined with Anime and Seasons)
 export async function getEpisodesBySeason(seasonId: string, animeId?: string): Promise<EpisodeItem[]> {
   if (!seasonId) return [];
-  const cacheKey = `season_eps_${seasonId}_${animeId || 'all'}`;
-  const cached = getCachedData<EpisodeItem[]>(cacheKey);
-
-  try {
-    let query = supabase
-      .from('episodes')
-      .select('*, anime(*), seasons(*)')
-      .eq('published', true)
-      .order('episode_number', { ascending: true });
-
-    if (animeId) {
-      query = query.eq('anime_id', animeId);
-    }
-
-    const { data, error } = await query;
-    if (error) {
-      console.error('[Supabase Real Error - getEpisodesBySeason]:', formatDbError(error));
-      throw new Error(formatDbError(error));
-    }
-
-    const normalized = (data || []).map((ep: any) => normalizeEpisodeDoc(ep.id, ep, animeId));
-    const matched = normalized.filter((ep: any) => {
-      if (ep.seasonId === seasonId || ep.season_id === seasonId) return true;
-      if (seasonId === 's1' && (ep.seasonNumber === 1 || !ep.seasonId)) return true;
-      return matchEpisodeToSeason(ep, seasonId);
-    });
-
-    setCachedData(cacheKey, matched);
-    return matched;
-  } catch (err: any) {
-    console.error('[Supabase Real Error - getEpisodesBySeason exception]:', formatDbError(err));
-    if (cached && cached.length > 0) return cached;
-    return [];
+  if (animeId) {
+    return await getEpisodesByAnimeId(animeId, seasonId);
   }
+  const all = await getAllEpisodes(true);
+  return all.filter((ep) => {
+    if (ep.seasonId === seasonId || ep.season_id === seasonId) return true;
+    if (seasonId === 's1' && (ep.seasonNumber === 1 || !ep.seasonId)) return true;
+    return matchEpisodeToSeason(ep, seasonId);
+  });
 }
 
-// 8. Get Episode by ID (Supabase Only - Requirement 7)
 export async function getEpisodeById(id: string): Promise<EpisodeItem | null> {
   if (!id) return null;
   const cacheKey = `episode_${id}`;
   const cached = getCachedData<EpisodeItem>(cacheKey);
   if (cached) return cached;
+  if (!db) return null;
 
   try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('episodes')
-        .select('*, anime(*), seasons(*)')
-        .eq('id', id)
-        .maybeSingle();
-    });
-
-    if (res?.data) {
-      const normalized = normalizeEpisodeDoc(res.data.id, res.data);
+    const epSnap = await getDoc(doc(db, 'episodes', id));
+    if (epSnap.exists()) {
+      const raw = epSnap.data();
+      const animeId = String(raw.animeId || raw.anime_id || '');
+      const anime = animeId ? await getAnimeById(animeId) : null;
+      const normalized = normalizeEpisodeDoc(epSnap.id, raw, anime || animeId);
       setCachedData(cacheKey, normalized);
       return normalized;
     }
 
-    // If ID belongs to a standalone Movie, resolve from anime table directly
-    const { data: movieAnime } = await supabase
-      .from('anime')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (movieAnime) {
-      const isMovie = Boolean(
-        movieAnime.type === 'Movie' || 
-        movieAnime.contentType === 'Movie' || 
-        movieAnime.content_type === 'Movie' || 
-        movieAnime.is_movie
-      );
-
-      if (isMovie) {
-        const { server1, server2, server3 } = resolveEpisodeServers(movieAnime);
-        const movieItem: EpisodeItem = {
-          id: movieAnime.id,
-          animeId: movieAnime.id,
-          anime_id: movieAnime.id,
-          seasonId: 'movie',
-          season_id: 'movie',
-          seasonNumber: 1,
-          season_number: 1,
-          episodeNumber: 1,
-          episode_number: 1,
-          title: movieAnime.title,
-          episode_title: movieAnime.title,
-          description: movieAnime.description || movieAnime.synopsis || '',
-          thumbnailUrl: movieAnime.banner_url || movieAnime.poster_url || '',
-          thumbnail_url: movieAnime.banner_url || movieAnime.poster_url || '',
-          duration: movieAnime.duration || '1h 45m',
-          releaseDate: movieAnime.release_date || movieAnime.releaseDate || '',
-          server1Url: server1,
-          server1_url: server1,
-          server2Url: server2,
-          server2_url: server2,
-          server3Url: server3,
-          server3_url: server3,
-          videoUrl: server1 || server2 || server3 || '',
-          published: true,
-          isMovie: true,
-        };
-        setCachedData(cacheKey, movieItem);
-        return movieItem;
-      }
+    const movieAnime = await getAnimeById(id);
+    if (movieAnime && movieAnime.isMovie) {
+      const { server1, server2, server3 } = resolveEpisodeServers(movieAnime);
+      const movieItem: EpisodeItem = {
+        id: movieAnime.id,
+        animeId: movieAnime.id,
+        anime_id: movieAnime.id,
+        seasonId: 'movie',
+        season_id: 'movie',
+        seasonNumber: 1,
+        season_number: 1,
+        episodeNumber: 1,
+        episode_number: 1,
+        title: movieAnime.title,
+        episode_title: movieAnime.title,
+        description: movieAnime.description || movieAnime.synopsis || '',
+        thumbnailUrl: movieAnime.bannerUrl || movieAnime.posterUrl || '',
+        thumbnail_url: movieAnime.bannerUrl || movieAnime.posterUrl || '',
+        duration: movieAnime.duration || '1h 45m',
+        releaseDate: movieAnime.releaseDate || '',
+        server1Url: server1,
+        server1_url: server1,
+        server2Url: server2,
+        server2_url: server2,
+        server3Url: server3,
+        server3_url: server3,
+        videoUrl: server1 || server2 || server3 || '',
+        published: true,
+        isMovie: true,
+        anime: movieAnime,
+      };
+      setCachedData(cacheKey, movieItem);
+      return movieItem;
     }
-  } catch (err: any) {
-    console.error(`[Supabase Real Error - getEpisodeById(${id})]:`, formatDbError(err));
-    if (cached) return cached;
-    const stale = getCachedData<EpisodeItem>(cacheKey, true);
-    if (stale) return stale;
+  } catch (err) {
+    console.error(`[Firestore Error - getEpisodeById(${id})]:`, formatDbError(err));
+    return getCachedData<EpisodeItem>(cacheKey, true) || null;
   }
 
   return null;
 }
 
-// 9. Get All Anime (Supabase Only - Requirement 2 & 5: Zero Mock Data, public.anime Only)
 export async function getAllAnime(): Promise<AnimeItem[]> {
   const cacheKey = 'all_anime';
   const cached = getCachedData<AnimeItem[]>(cacheKey);
+  if (cached && cached.length > 0) return cached;
+  if (!db) return [];
 
   try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('anime')
-        .select('*')
-        .order('created_at', { ascending: false });
-    });
-
-    if (res?.error) {
-      console.error('[Supabase Real Error - getAllAnime]:', formatDbError(res.error));
-      throw new Error(formatDbError(res.error));
-    }
-
-    if (res?.data && res.data.length > 0) {
-      const remote = res.data.map((d: any) => normalizeAnime(d, d.id));
-      setCachedData(cacheKey, remote);
-      return remote;
-    }
-
-    if (cached && cached.length > 0) return cached;
-    return [];
-  } catch (err: any) {
-    console.error('[Supabase Real Error - getAllAnime exception]:', formatDbError(err));
-    if (cached && cached.length > 0) return cached;
-    const stale = getCachedData<AnimeItem[]>(cacheKey, true);
-    if (stale && stale.length > 0) return stale;
-    return [];
+    const snap = await getDocs(collection(db, 'anime'));
+    const list = snap.docs
+      .map((d) => normalizeAnime(d.data(), d.id))
+      .sort((a, b) => getPublishTimestamp(b) - getPublishTimestamp(a));
+    setCachedData(cacheKey, list);
+    return list;
+  } catch (err) {
+    console.error('[Firestore Error - getAllAnime]:', formatDbError(err));
+    return getCachedData<AnimeItem[]>(cacheKey, true) || [];
   }
 }
 
-// 10. Get All Seasons (Supabase Only - Requirement 2 & 5: public.seasons Only)
 export async function getAllSeasons(): Promise<SeasonItem[]> {
   const cacheKey = 'all_seasons';
   const cached = getCachedData<SeasonItem[]>(cacheKey);
+  if (cached && cached.length > 0) return cached;
+  if (!db) return [];
 
   try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('seasons')
-        .select('*')
-        .order('season_number', { ascending: true });
-    });
-
-    if (res?.error) {
-      console.error('[Supabase Real Error - getAllSeasons]:', formatDbError(res.error));
-      throw new Error(formatDbError(res.error));
-    }
-
-    if (res?.data && res.data.length > 0) {
-      const mapped = res.data.map((item: any) => ({
-        ...item,
-        id: String(item.id),
-        animeId: String(item.anime_id || item.animeId),
-        seasonNumber: Number(item.season_number || item.seasonNumber || 1),
-        title: item.title || `Season ${item.season_number || item.seasonNumber || 1}`,
-        bannerUrl: (item.banner_url || item.bannerUrl || '').trim(),
-        banner_url: (item.banner_url || item.bannerUrl || '').trim(),
-        posterUrl: (item.poster_url || item.posterUrl || '').trim(),
-        poster_url: (item.poster_url || item.posterUrl || '').trim(),
-        order: Number(item.order ?? (item.season_number || 1)),
-      }));
-      setCachedData(cacheKey, mapped);
-      return mapped;
-    }
-
-    if (cached && cached.length > 0) return cached;
-    return [];
-  } catch (err: any) {
-    console.error('[Supabase Real Error - getAllSeasons exception]:', formatDbError(err));
-    if (cached && cached.length > 0) return cached;
-    const stale = getCachedData<SeasonItem[]>(cacheKey, true);
-    if (stale && stale.length > 0) return stale;
-    return [];
+    const snap = await getDocs(collection(db, 'seasons'));
+    const list = snap.docs
+      .map((d) => normalizeSeasonDoc(d.id, d.data()))
+      .sort((a, b) => (a.seasonNumber || 1) - (b.seasonNumber || 1));
+    setCachedData(cacheKey, list);
+    return list;
+  } catch (err) {
+    console.error('[Firestore Error - getAllSeasons]:', formatDbError(err));
+    return getCachedData<SeasonItem[]>(cacheKey, true) || [];
   }
 }
 
-// 11. Get All Episodes (Supabase Only - Requirement 3 & 4: Joined with Anime & Seasons, Published Only)
 export async function getAllEpisodes(publishedOnly = true): Promise<EpisodeItem[]> {
   const cacheKey = publishedOnly ? 'all_episodes_published' : 'all_episodes_all';
   const cached = getCachedData<EpisodeItem[]>(cacheKey);
+  if (cached && cached.length > 0) return cached;
+  if (!db) return [];
 
   try {
-    const res = await executeSupabaseWithRetry(async () => {
-      let query = supabase
-        .from('episodes')
-        .select('*, anime(*), seasons(*)')
-        .order('created_at', { ascending: false });
+    const canReadDrafts = !publishedOnly && isOwnerEmail(auth?.currentUser?.email);
+    const epsQuery = canReadDrafts
+      ? collection(db, 'episodes')
+      : query(collection(db, 'episodes'), where('published', '==', true));
 
-      if (publishedOnly) {
-        query = query.eq('published', true);
-      }
-      return await query;
-    });
+    const [epsSnap, animeList, seasonsList] = await Promise.all([
+      getDocs(epsQuery),
+      getAllAnime(),
+      getAllSeasons(),
+    ]);
 
-    if (res?.error) {
-      console.error('[Supabase Real Error - getAllEpisodes]:', formatDbError(res.error));
-      throw new Error(formatDbError(res.error));
-    }
+    const animeMap = new Map<string, AnimeItem>();
+    animeList.forEach((a) => animeMap.set(a.id, a));
+    const seasonMap = new Map<string, SeasonItem>();
+    seasonsList.forEach((s) => seasonMap.set(s.id, s));
 
-    if (res?.data && res.data.length > 0) {
-      const mapped = res.data.map((d: any) => normalizeEpisodeDoc(d.id, d));
-      setCachedData(cacheKey, mapped);
-      return mapped;
-    }
+    const mapped = epsSnap.docs
+      .map((d) => {
+        const raw = d.data();
+        const aId = String(raw.animeId || raw.anime_id || '');
+        const sId = String(raw.seasonId || raw.season_id || '');
+        return normalizeEpisodeDoc(d.id, raw, animeMap.get(aId) || aId, seasonMap.get(sId) || null);
+      })
+      .sort((a, b) => getPublishTimestamp(b) - getPublishTimestamp(a));
 
-    if (cached && cached.length > 0) return cached;
-    return [];
-  } catch (err: any) {
-    console.error('[Supabase Real Error - getAllEpisodes exception]:', formatDbError(err));
-    if (cached && cached.length > 0) return cached;
-    const stale = getCachedData<EpisodeItem[]>(cacheKey, true);
-    if (stale && stale.length > 0) return stale;
-    return [];
+    setCachedData(cacheKey, mapped);
+    return mapped;
+  } catch (err) {
+    console.error('[Firestore Error - getAllEpisodes]:', formatDbError(err));
+    return getCachedData<EpisodeItem[]>(cacheKey, true) || [];
   }
 }
 
-// 11. Fetch All Genres from Supabase (with caching)
 export async function getGenres(): Promise<string[]> {
   const cached = getCachedData<string[]>('all_genres');
   if (cached && cached.length > 0) return cached;
 
-  const animeTable = await getActiveAnimeTable();
-
   try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase.from(animeTable).select('genres');
-    });
-
-    if (res?.data && res.data.length > 0) {
-      const set = new Set<string>();
-      res.data.forEach((row: any) => {
-        if (Array.isArray(row.genres)) {
-          row.genres.forEach((g: string) => {
-            if (g && typeof g === 'string') set.add(g.trim());
-          });
-        }
-      });
-      if (set.size > 0) {
-        const result = ['All', ...Array.from(set).sort()];
-        setCachedData('all_genres', result);
-        return result;
+    const allAnime = await getAllAnime();
+    const set = new Set<string>();
+    allAnime.forEach((a) => {
+      if (Array.isArray(a.genres)) {
+        a.genres.forEach((g) => {
+          if (g && typeof g === 'string') set.add(g.trim());
+        });
       }
+    });
+    if (set.size > 0) {
+      const result = ['All', ...Array.from(set).sort()];
+      setCachedData('all_genres', result);
+      return result;
     }
   } catch {}
 
@@ -1674,255 +1173,242 @@ export async function getGenres(): Promise<string[]> {
 }
 
 // -------------------------------------------------------------
-// WRITE OPERATIONS (SUPABASE ONLY WITH DATA SAFETY & ROLLBACK)
+// WRITE OPERATIONS (CLOUD FIRESTORE - OWNER VERIFIED VIA RULES)
 // -------------------------------------------------------------
 
-// Insert new Anime into Supabase public.anime (Requirement 2 & 6)
+function clearAnimeCaches() {
+  clearCachePrefix('anime');
+  clearCachedData('unified_app_catalog');
+  clearCachedData('all_anime');
+  clearCachedData('featured_anime');
+  clearCachedData('trending_anime');
+  clearCachedData('new_drops');
+  clearCachedData('all_genres');
+}
+
 export async function insertAnime(animeData: Partial<AnimeItem>): Promise<AnimeItem> {
   assertOwner('add anime');
-  const targetId = String(animeData.id || `anm_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
+  if (!db) throw new Error('Firestore is not initialized.');
 
-  const genres = Array.isArray(animeData.genres)
-    ? animeData.genres
-    : typeof animeData.genres === 'string'
-    ? (animeData.genres as string).split(',').map((g: string) => g.trim()).filter(Boolean)
-    : [];
+  const targetId = safeDocId(String(animeData.id || `anm_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`));
+  const genres = (
+    Array.isArray(animeData.genres)
+      ? animeData.genres
+      : typeof animeData.genres === 'string'
+      ? (animeData.genres as string).split(',').map((g) => g.trim()).filter(Boolean)
+      : []
+  ).slice(0, 20);
 
   const poster = sanitizeUrl(animeData.posterUrl || animeData.poster_url || '');
   const banner = sanitizeUrl(animeData.bannerUrl || animeData.banner_url || poster);
-  const rating = sanitizeString(animeData.rating || '9.5', 10);
+  const rating = sanitizeString(animeData.rating || '9.5', 20);
   const releaseYear = sanitizeString(animeData.releaseYear || animeData.release_year || '', 20);
   const status = sanitizeString(animeData.status || 'Ongoing', 50);
   const language = sanitizeString(animeData.language || 'Hindi Dub', 50);
-  const dubbedBy = sanitizeString(animeData.dubbedBy || animeData.dubbed_by || 'ZK Dubbing Studio', 100);
+  const studio = sanitizeString(animeData.studio || '', 120);
+  const dubbedBy = sanitizeString(animeData.dubbedBy || animeData.dubbed_by || 'ZK Dubbing Studio', 120);
   const featured = Boolean(animeData.featured);
   const trending = Boolean(animeData.trending);
-
-  const type = (animeData.type === 'Movie' || animeData.contentType === 'Movie' || animeData.isMovie) ? 'Movie' : 'TV Series';
+  const type = animeData.type === 'Movie' || animeData.contentType === 'Movie' || animeData.isMovie ? 'Movie' : 'TV Series';
   const isMovie = type === 'Movie';
-  const duration = sanitizeString(animeData.duration ? String(animeData.duration).trim() : (isMovie ? '1h 45m' : ''), 50);
-  const releaseDate = sanitizeString(animeData.releaseDate ? String(animeData.releaseDate).trim() : (animeData.release_date || releaseYear), 50);
+  const duration = sanitizeString(animeData.duration ? String(animeData.duration).trim() : isMovie ? '1h 45m' : '', 50);
+  const releaseDate = sanitizeString(animeData.releaseDate ? String(animeData.releaseDate).trim() : animeData.release_date || releaseYear, 50);
 
   const server1 = sanitizeUrl(extractAbyssUrl(animeData.server1Url || animeData.server1_url || ''));
   const server2 = sanitizeUrl(extractFileMoonUrl(animeData.server2Url || animeData.server2_url || ''));
   const server3 = sanitizeUrl(extractVDOHideUrl(animeData.server3Url || animeData.server3_url || ''));
+  const nowIso = new Date().toISOString();
 
-  const payload: any = {
+  const payload: Record<string, any> = {
     id: targetId,
     title: sanitizeString(animeData.title || 'Untitled Anime', 300),
     description: sanitizeString(animeData.description || animeData.synopsis || '', 10000),
     synopsis: sanitizeString(animeData.synopsis || animeData.description || '', 10000),
+    posterUrl: poster,
     poster_url: poster,
+    bannerUrl: banner,
     banner_url: banner,
     genres,
     rating,
+    releaseYear,
     release_year: releaseYear,
+    releaseDate,
+    release_date: releaseDate,
     status,
     language,
+    studio,
+    dubbedBy,
     dubbed_by: dubbedBy,
     featured,
     trending,
+    views: typeof animeData.views === 'number' ? animeData.views : 0,
     type,
+    contentType: type,
     content_type: type,
+    isMovie,
     is_movie: isMovie,
     duration,
-    release_date: releaseDate,
+    server1Url: server1,
     server1_url: server1,
+    server2Url: server2,
     server2_url: server2,
+    server3Url: server3,
     server3_url: server3,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    createdAt: Date.now(),
+    created_at: nowIso,
+    updatedAt: nowIso,
+    updated_at: nowIso,
   };
 
-  const { data, error } = await supabase.from('anime').insert(payload).select().single();
-  if (error) {
-    const errorMsg = formatDbError(error);
-    console.error('[Supabase Real Error - insertAnime]:', error);
-    throw new Error(errorMsg);
+  if (animeData.dubCredits && typeof animeData.dubCredits === 'object') {
+    payload.dubCredits = animeData.dubCredits;
   }
 
-  // If Movie, ensure movie episode is created in public.episodes
-  if (isMovie) {
-    try {
-      const movieEpDoc: any = {
-        id: targetId,
-        anime_id: targetId,
-        season_id: null,
-        season_number: 1,
-        episode_number: 1,
-        episode_title: payload.title,
-        description: payload.description,
-        thumbnail_url: banner || poster,
-        duration: duration || '1h 45m',
-        release_date: releaseDate,
-        server1_url: server1,
-        server2_url: server2,
-        server3_url: server3,
-        published: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-      await supabase.from('episodes').upsert(movieEpDoc);
-    } catch (epErr) {
-      console.warn('[insertAnime Movie Episode Warning]:', formatDbError(epErr));
-    }
+  try {
+    await setDoc(doc(db, 'anime', targetId), payload);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `anime/${targetId}`);
   }
 
-  // Invalidate cache and broadcast refresh events immediately
-  clearCachePrefix('anime');
-  clearCachedData('all_anime');
-  clearCachedData('featured_anime');
-  clearCachedData('trending_anime');
-  clearCachedData('new_drops');
-
+  clearAnimeCaches();
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('zk_anime_published', { detail: { id: targetId } }));
     window.dispatchEvent(new CustomEvent('zk_data_changed', { detail: { type: 'anime', id: targetId } }));
   }
 
-  return normalizeAnime(data || payload, targetId);
+  return normalizeAnime(payload, targetId);
 }
 
-// Update existing Anime in Supabase public.anime (Requirement 2 & 6)
 export async function updateAnime(id: string, animeData: Partial<AnimeItem>): Promise<AnimeItem> {
   assertOwner('edit anime');
-  const targetId = String(id).trim();
+  if (!db) throw new Error('Firestore is not initialized.');
+  const targetId = safeDocId(id);
   if (!targetId) throw new Error('Cannot update anime: ID is required');
 
-  const genres = animeData.genres !== undefined
-    ? (Array.isArray(animeData.genres)
-        ? animeData.genres
-        : typeof animeData.genres === 'string'
-        ? (animeData.genres as string).split(',').map((g: string) => g.trim()).filter(Boolean)
-        : [])
-    : undefined;
-
-  const type = animeData.type || animeData.contentType || (animeData.isMovie ? 'Movie' : undefined);
-  const isMovie = type ? type === 'Movie' : undefined;
-
-  const payload: any = {
+  const payload: Record<string, any> = {
+    updatedAt: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
 
-  if (animeData.title !== undefined) payload.title = animeData.title.trim();
-  if (animeData.description !== undefined) payload.description = animeData.description;
-  if (animeData.synopsis !== undefined) payload.synopsis = animeData.synopsis;
+  if (animeData.title !== undefined) payload.title = sanitizeString(animeData.title, 300);
+  if (animeData.description !== undefined) payload.description = sanitizeString(animeData.description, 10000);
+  if (animeData.synopsis !== undefined) payload.synopsis = sanitizeString(animeData.synopsis, 10000);
   if (animeData.posterUrl !== undefined || animeData.poster_url !== undefined) {
-    payload.poster_url = animeData.posterUrl || animeData.poster_url || '';
+    const p = sanitizeUrl(animeData.posterUrl ?? animeData.poster_url ?? '');
+    payload.posterUrl = p;
+    payload.poster_url = p;
   }
   if (animeData.bannerUrl !== undefined || animeData.banner_url !== undefined) {
-    payload.banner_url = animeData.bannerUrl || animeData.banner_url || payload.poster_url || '';
+    const b = sanitizeUrl(animeData.bannerUrl ?? animeData.banner_url ?? '');
+    payload.bannerUrl = b;
+    payload.banner_url = b;
   }
-  if (genres !== undefined) payload.genres = genres;
-  if (animeData.rating !== undefined) payload.rating = String(animeData.rating);
+  if (animeData.genres !== undefined) {
+    payload.genres = (
+      Array.isArray(animeData.genres)
+        ? animeData.genres
+        : typeof animeData.genres === 'string'
+        ? (animeData.genres as string).split(',').map((g) => g.trim()).filter(Boolean)
+        : []
+    ).slice(0, 20);
+  }
+  if (animeData.rating !== undefined) payload.rating = sanitizeString(animeData.rating, 20);
   if (animeData.releaseYear !== undefined || animeData.release_year !== undefined) {
-    payload.release_year = String(animeData.releaseYear || animeData.release_year || '');
+    const ry = sanitizeString(animeData.releaseYear ?? animeData.release_year ?? '', 20);
+    payload.releaseYear = ry;
+    payload.release_year = ry;
   }
-  if (animeData.status !== undefined) payload.status = animeData.status;
-  if (animeData.language !== undefined) payload.language = animeData.language;
+  if (animeData.status !== undefined) payload.status = sanitizeString(animeData.status, 50);
+  if (animeData.language !== undefined) payload.language = sanitizeString(animeData.language, 50);
+  if (animeData.studio !== undefined) payload.studio = sanitizeString(animeData.studio, 120);
   if (animeData.dubbedBy !== undefined || animeData.dubbed_by !== undefined) {
-    payload.dubbed_by = animeData.dubbedBy || animeData.dubbed_by;
+    const dbBy = sanitizeString(animeData.dubbedBy ?? animeData.dubbed_by ?? '', 120);
+    payload.dubbedBy = dbBy;
+    payload.dubbed_by = dbBy;
   }
+  if (animeData.dubCredits !== undefined) payload.dubCredits = animeData.dubCredits;
   if (animeData.featured !== undefined) payload.featured = Boolean(animeData.featured);
   if (animeData.trending !== undefined) payload.trending = Boolean(animeData.trending);
+
+  const type = animeData.type || animeData.contentType || (animeData.isMovie ? 'Movie' : undefined);
   if (type !== undefined) {
+    const isMovie = type === 'Movie';
     payload.type = type;
+    payload.contentType = type;
     payload.content_type = type;
+    payload.isMovie = isMovie;
+    payload.is_movie = isMovie;
   }
-  if (isMovie !== undefined) payload.is_movie = isMovie;
-  if (animeData.duration !== undefined) payload.duration = animeData.duration;
+  if (animeData.duration !== undefined) payload.duration = sanitizeString(animeData.duration, 50);
   if (animeData.releaseDate !== undefined || animeData.release_date !== undefined) {
-    payload.release_date = animeData.releaseDate || animeData.release_date;
+    const rd = sanitizeString(animeData.releaseDate ?? animeData.release_date ?? '', 50);
+    payload.releaseDate = rd;
+    payload.release_date = rd;
   }
   if (animeData.server1Url !== undefined || animeData.server1_url !== undefined) {
-    payload.server1_url = extractAbyssUrl(animeData.server1Url || animeData.server1_url || '');
+    const s1 = sanitizeUrl(extractAbyssUrl(animeData.server1Url ?? animeData.server1_url ?? ''));
+    payload.server1Url = s1;
+    payload.server1_url = s1;
   }
   if (animeData.server2Url !== undefined || animeData.server2_url !== undefined) {
-    payload.server2_url = extractFileMoonUrl(animeData.server2Url || animeData.server2_url || '');
+    const s2 = sanitizeUrl(extractFileMoonUrl(animeData.server2Url ?? animeData.server2_url ?? ''));
+    payload.server2Url = s2;
+    payload.server2_url = s2;
   }
   if (animeData.server3Url !== undefined || animeData.server3_url !== undefined) {
-    payload.server3_url = extractVDOHideUrl(animeData.server3Url || animeData.server3_url || '');
+    const s3 = sanitizeUrl(extractVDOHideUrl(animeData.server3Url ?? animeData.server3_url ?? ''));
+    payload.server3Url = s3;
+    payload.server3_url = s3;
   }
 
-  const { data, error } = await supabase.from('anime').update(payload).eq('id', targetId).select().single();
-  if (error) {
-    const errorMsg = formatDbError(error);
-    console.error('[Supabase Real Error - updateAnime]:', error);
-    throw new Error(errorMsg);
+  try {
+    await updateDoc(doc(db, 'anime', targetId), payload);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `anime/${targetId}`);
   }
 
-  // Invalidate cache and broadcast refresh events immediately
-  clearCachePrefix('anime');
-  clearCachedData('all_anime');
-  clearCachedData('featured_anime');
-  clearCachedData('trending_anime');
-  clearCachedData('new_drops');
-
+  clearAnimeCaches();
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('zk_anime_published', { detail: { id: targetId } }));
     window.dispatchEvent(new CustomEvent('zk_data_changed', { detail: { type: 'anime', id: targetId } }));
   }
 
-  return normalizeAnime(data || { ...payload, id: targetId }, targetId);
+  const fresh = await getAnimeById(targetId);
+  return fresh || normalizeAnime({ ...payload, id: targetId }, targetId);
 }
 
-// Save Anime to Supabase (calls updateAnime or insertAnime)
 export async function saveAnimeBoth(animeData: any, id?: string): Promise<string> {
-  const targetId = id || animeData.id;
-
-  if (targetId) {
-    // Check if record exists to decide insert or update
-    const { data: existing } = await supabase.from('anime').select('id').eq('id', targetId).maybeSingle();
-    if (existing) {
-      const updated = await updateAnime(targetId, animeData);
+  assertOwner('save anime');
+  const rawId = id || animeData.id;
+  if (rawId && db) {
+    const cleanId = safeDocId(rawId);
+    const snap = await getDoc(doc(db, 'anime', cleanId)).catch(() => null);
+    if (snap?.exists()) {
+      const updated = await updateAnime(cleanId, animeData);
       return updated.id;
     }
   }
-
-  const inserted = await insertAnime({ ...animeData, id: targetId });
+  const inserted = await insertAnime({ ...animeData, id: rawId });
   return inserted.id;
 }
 export const saveAnime = saveAnimeBoth;
 
-// Delete Anime from Supabase (Requirement 2 & 5)
 export async function deleteAnimeBoth(id: string): Promise<void> {
   assertOwner('delete anime');
-  const cleanId = String(id).trim();
+  if (!db) throw new Error('Firestore is not initialized.');
+  const cleanId = safeDocId(id);
 
-  // 1. Fetch current data for disaster recovery snapshot
   try {
-    const { data: current } = await supabase.from('anime').select('*').eq('id', cleanId).maybeSingle();
-    if (current) {
-      await createAutoBackup('anime', cleanId, current);
+    const existing = await getDoc(doc(db, 'anime', cleanId));
+    if (existing.exists()) {
+      await createAutoBackup('anime', cleanId, existing.data());
     }
-  } catch {}
-
-  // Delete from local catalog store
-  deleteLocalAnimeItem(cleanId);
-
-  // 2. Delete Anime record from Supabase
-  try {
-    const { error: delErr } = await supabase.from('anime').delete().eq('id', cleanId);
-    if (delErr && !isSchemaCachePending(delErr)) {
-      console.error(`[Supabase deleteAnime error]:`, formatDbError(delErr));
-      throw new Error(formatDbError(delErr));
-    }
-  } catch (err: any) {
-    if (!isSchemaCachePending(err)) throw new Error(formatDbError(err));
+    await deleteDoc(doc(db, 'anime', cleanId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `anime/${cleanId}`);
   }
 
-  // 3. Clean up orphaned episodes and seasons
-  try {
-    await supabase.from('episodes').delete().eq('anime_id', cleanId);
-    await supabase.from('seasons').delete().eq('anime_id', cleanId);
-  } catch {}
-
-  clearCachePrefix('anime');
-  clearCachedData('all_anime');
-  clearCachedData('featured_anime');
-  clearCachedData('trending_anime');
-  clearCachedData('new_drops');
-
+  clearAnimeCaches();
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('zk_anime_deleted', { detail: { id: cleanId } }));
     window.dispatchEvent(new CustomEvent('zk_data_changed', { detail: { type: 'anime', id: cleanId } }));
@@ -1930,63 +1416,47 @@ export async function deleteAnimeBoth(id: string): Promise<void> {
 }
 export const deleteAnime = deleteAnimeBoth;
 
-// Save Season to Supabase (Requirement 2 & 5)
 export async function saveSeasonBoth(seasonData: any, id?: string): Promise<string> {
   assertOwner('add or edit seasons');
-  const targetId = String(id || seasonData.id || `sea_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
-  const targetAnimeId = String(seasonData.animeId || seasonData.anime_id);
+  if (!db) throw new Error('Firestore is not initialized.');
+
+  const targetId = safeDocId(String(id || seasonData.id || `sea_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`));
+  const targetAnimeId = safeDocId(String(seasonData.animeId || seasonData.anime_id));
   const sNum = Number(seasonData.seasonNumber || seasonData.season_number) || 1;
-  const seaTable = await getActiveSeasonsTable();
+  const nowIso = new Date().toISOString();
 
-  // Ensure parent anime exists in Supabase so seasons_anime_id_fkey foreign key never fails
-  if (targetAnimeId) {
-    await ensureAnimeExistsInSupabase(targetAnimeId);
-  }
-
-  // 1. Snapshot previous state for recovery
-  let previousState: any = null;
-  if (id) {
-    try {
-      const { data: prev } = await supabase.from(seaTable).select('*').eq('id', targetId).maybeSingle();
-      previousState = prev;
-      if (prev) {
-        await createAutoBackup('season', targetId, prev);
-      }
-    } catch {}
-  }
-
-  // 2. Prepare payload
-  const supabasePayload: any = {
+  const payload: Record<string, any> = {
     id: targetId,
+    animeId: targetAnimeId,
     anime_id: targetAnimeId,
+    seasonNumber: sNum,
     season_number: sNum,
     title: sanitizeString(seasonData.title || `Season ${sNum}`, 200),
     description: sanitizeString(seasonData.description || '', 5000),
+    bannerUrl: sanitizeUrl(seasonData.bannerUrl || seasonData.banner_url || ''),
     banner_url: sanitizeUrl(seasonData.bannerUrl || seasonData.banner_url || ''),
+    posterUrl: sanitizeUrl(seasonData.posterUrl || seasonData.poster_url || ''),
     poster_url: sanitizeUrl(seasonData.posterUrl || seasonData.poster_url || ''),
     order: Number(seasonData.order ?? sNum),
     status: sanitizeString(seasonData.status || 'Published', 50),
+    updatedAt: nowIso,
+    updated_at: nowIso,
   };
 
-  if (!id && !previousState) {
-    supabasePayload.created_at = new Date().toISOString();
-  }
-
-  // 3. Upsert into Supabase public.seasons table
   try {
-    const { error: upsertErr } = await supabase.from('seasons').upsert(supabasePayload);
-    if (upsertErr && !isSchemaCachePending(upsertErr)) {
-      console.error(`[Supabase saveSeason error]:`, formatDbError(upsertErr));
-      throw new Error(formatDbError(upsertErr));
+    const existing = await getDoc(doc(db, 'seasons', targetId)).catch(() => null);
+    if (!existing?.exists()) {
+      payload.createdAt = Date.now();
+      payload.created_at = nowIso;
     }
-  } catch (err: any) {
-    if (!isSchemaCachePending(err)) throw new Error(formatDbError(err));
+    await setDoc(doc(db, 'seasons', targetId), payload, { merge: true });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `seasons/${targetId}`);
   }
 
-  // Invalidate season cache
-  clearCachePrefix(`seasons_${targetAnimeId}`);
   clearCachePrefix('seasons_');
   clearCachedData('all_seasons');
+  clearCachedData('unified_app_catalog');
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('zk_data_changed', { detail: { type: 'season', id: targetId, animeId: targetAnimeId } }));
@@ -1996,30 +1466,20 @@ export async function saveSeasonBoth(seasonData: any, id?: string): Promise<stri
 }
 export const saveSeason = saveSeasonBoth;
 
-// Delete Season from Supabase (Requirement 2 & 5)
 export async function deleteSeasonBoth(id: string): Promise<void> {
   assertOwner('delete seasons');
-  const cleanId = String(id).trim();
+  if (!db) throw new Error('Firestore is not initialized.');
+  const cleanId = safeDocId(id);
 
   try {
-    const { data: current } = await supabase.from('seasons').select('*').eq('id', cleanId).maybeSingle();
-    if (current) {
-      await createAutoBackup('season', cleanId, current);
-    }
-  } catch {}
-
-  try {
-    const { error: delErr } = await supabase.from('seasons').delete().eq('id', cleanId);
-    if (delErr && !isSchemaCachePending(delErr)) {
-      console.error(`[Supabase deleteSeason error]:`, formatDbError(delErr));
-      throw new Error(formatDbError(delErr));
-    }
-  } catch (err: any) {
-    if (!isSchemaCachePending(err)) throw new Error(formatDbError(err));
+    await deleteDoc(doc(db, 'seasons', cleanId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `seasons/${cleanId}`);
   }
 
   clearCachePrefix('seasons_');
   clearCachedData('all_seasons');
+  clearCachedData('unified_app_catalog');
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('zk_data_changed', { detail: { type: 'season', id: cleanId } }));
@@ -2027,263 +1487,120 @@ export async function deleteSeasonBoth(id: string): Promise<void> {
 }
 export const deleteSeason = deleteSeasonBoth;
 
-// Ensure Anime exists in Supabase to prevent foreign key errors (episodes_anime_id_fkey & seasons_anime_id_fkey)
-export async function ensureAnimeExistsInSupabase(animeId: string): Promise<boolean> {
-  if (!animeId) return false;
-  try {
-    const { data: existing } = await supabase
-      .from('anime')
-      .select('id')
-      .eq('id', animeId)
-      .maybeSingle();
-
-    if (existing) return true;
-
-    // Fallback: create basic anime row in Supabase so foreign key constraint never fails
-    await supabase.from('anime').upsert({
-      id: animeId,
-      title: `Anime (${animeId})`,
-      status: 'Ongoing',
-      type: 'TV Series',
-      content_type: 'TV Series',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Ensures that a valid season exists for the anime (Requirements 1, 2, 3, 4, 5, 7)
- * - Checks if the selected season exists
- * - If no season exists, automatically creates Season 1 for that anime
- * - Uses the newly created season id as season_id
- * - Never sends an invalid season_id
- * - If season_id is empty or cannot be resolved, saves as NULL instead of an invalid value
- */
 export async function ensureSeasonExists(
   animeId: string,
   requestedSeasonId?: string | null,
   requestedSeasonNumber?: number
 ): Promise<{ seasonId: string | null; seasonNumber: number }> {
-  if (!animeId) {
+  if (!animeId || !db) {
     return { seasonId: null, seasonNumber: requestedSeasonNumber || 1 };
   }
 
-  // 1. Ensure anime exists in Supabase so seasons foreign key (seasons_anime_id_fkey) never fails
-  await ensureAnimeExistsInSupabase(animeId);
+  const cleanRequestedId = requestedSeasonId ? safeDocId(requestedSeasonId) : '';
+  const isPlaceholder =
+    !cleanRequestedId || cleanRequestedId === 'null' || cleanRequestedId === 'undefined' || cleanRequestedId === 's1' || cleanRequestedId === 'movie';
 
-  const cleanRequestedId = requestedSeasonId ? String(requestedSeasonId).trim() : '';
-  const isInvalidFormat = !cleanRequestedId || 
-    cleanRequestedId === 'null' || 
-    cleanRequestedId === 'undefined' || 
-    cleanRequestedId === 's1' || 
-    cleanRequestedId === 'movie';
-
-  // 2. If a specific season ID was requested, check if it actually exists in seasons table
-  if (!isInvalidFormat) {
+  if (!isPlaceholder) {
     try {
-      const { data: matchedSeason } = await supabase
-        .from('seasons')
-        .select('id, anime_id, season_number')
-        .eq('id', cleanRequestedId)
-        .maybeSingle();
-
-      if (matchedSeason && matchedSeason.id) {
+      const snap = await getDoc(doc(db, 'seasons', cleanRequestedId));
+      if (snap.exists()) {
+        const d = snap.data();
         return {
-          seasonId: matchedSeason.id,
-          seasonNumber: matchedSeason.season_number != null ? Number(matchedSeason.season_number) : (requestedSeasonNumber || 1),
+          seasonId: snap.id,
+          seasonNumber: Number(d.seasonNumber || d.season_number || requestedSeasonNumber || 1),
         };
       }
-    } catch {
-      // ignore and proceed
-    }
+    } catch {}
   }
 
-  // 3. Check if ANY season already exists for this anime in seasons table
-  let existingSeasons: any[] = [];
   try {
-    const { data } = await supabase
-      .from('seasons')
-      .select('id, anime_id, season_number')
-      .eq('anime_id', animeId)
-      .order('season_number', { ascending: true });
-
-    if (data && data.length > 0) {
-      existingSeasons = data;
-    }
-  } catch {
-    // ignore
-  }
-
-  // 4. If no season exists at all for this anime, automatically create Season 1
-  if (existingSeasons.length === 0) {
-    try {
-      const newSeasonId = `sea_${animeId.replace(/[^a-zA-Z0-9_-]/g, '')}_s1_${Date.now()}`;
-      const newSeasonPayload = {
-        id: newSeasonId,
-        anime_id: animeId,
-        season_number: 1,
-        title: 'Season 1',
-        description: '',
-        banner_url: '',
-        poster_url: '',
-        order: 1,
-        status: 'Published',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error: createSeasonErr } = await supabase.from('seasons').insert(newSeasonPayload);
-      if (!createSeasonErr) {
-        return {
-          seasonId: newSeasonId,
-          seasonNumber: 1,
-        };
+    const existingSeasons = await getSeasonsByAnimeId(animeId);
+    if (existingSeasons.length > 0 && requestedSeasonNumber) {
+      const matchByNum = existingSeasons.find((s) => Number(s.seasonNumber) === Number(requestedSeasonNumber));
+      if (matchByNum && matchByNum.id !== 's1') {
+        return { seasonId: matchByNum.id, seasonNumber: Number(matchByNum.seasonNumber) };
       }
-      console.warn('[Auto-create Season 1 Notice]:', formatDbError(createSeasonErr));
-    } catch (err) {
-      console.warn('[Auto-create Season 1 Exception]:', formatDbError(err));
     }
+  } catch {}
 
-    return {
-      seasonId: null,
-      seasonNumber: requestedSeasonNumber || 1,
-    };
-  }
-
-  // 5. Existing seasons exist:
-  if (requestedSeasonNumber) {
-    const matchByNum = existingSeasons.find(s => Number(s.season_number) === Number(requestedSeasonNumber));
-    if (matchByNum) {
-      return {
-        seasonId: matchByNum.id,
-        seasonNumber: Number(matchByNum.season_number),
-      };
-    }
-  }
-
-  return {
-    seasonId: null,
-    seasonNumber: requestedSeasonNumber || 1,
-  };
+  return { seasonId: null, seasonNumber: requestedSeasonNumber || 1 };
 }
 
-// Save Episode to Supabase (Requirement 2, 5, 7)
 export async function saveEpisodeBoth(epData: any, id?: string): Promise<string> {
   assertOwner('add or edit episodes');
-  const targetId = String(id || epData.id || `ep_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
-  const targetAnimeId = String(epData.animeId || epData.anime_id);
+  if (!db) throw new Error('Firestore is not initialized.');
+
+  const targetId = safeDocId(String(id || epData.id || `ep_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`));
+  const targetAnimeId = safeDocId(String(epData.animeId || epData.anime_id));
   const epNum = Number(epData.episodeNumber || epData.episode_number) || 1;
   const rawSeasonId = epData.seasonId || epData.season_id;
   const rawSeasonNum = epData.seasonNumber || epData.season_number;
 
-  // 1. Ensure anime exists in Supabase so episodes_anime_id_fkey is satisfied
-  if (targetAnimeId) {
-    await ensureAnimeExistsInSupabase(targetAnimeId);
-  }
-
-  // 2. Validate / auto-create season and never send invalid season_id (Requirements 1, 2, 3, 4, 5)
   const { seasonId: validatedSeasonId, seasonNumber: validatedSeasonNum } = await ensureSeasonExists(
     targetAnimeId,
     rawSeasonId,
     rawSeasonNum ? Number(rawSeasonNum) : 1
   );
 
-  const epTable = await getActiveEpisodesTable();
-  const seaTable = await getActiveSeasonsTable();
   const { server1, server2, server3 } = resolveEpisodeServers(epData);
+  const cleanTitle = sanitizeString(epData.title || epData.episode_title || `Episode ${epNum}`, 250);
+  const cleanThumb = sanitizeUrl(epData.thumbnailUrl || epData.thumbnail_url || '');
+  const nowIso = new Date().toISOString();
 
-  // Requirement 4 & 5: Ensure season_id is strictly valid or NULL before inserting
-  let finalSeasonId: string | null = null;
-  if (validatedSeasonId && typeof validatedSeasonId === 'string' && validatedSeasonId.trim() !== '') {
-    const cleanId = validatedSeasonId.trim();
-    if (cleanId !== 's1' && cleanId !== 'null' && cleanId !== 'undefined' && cleanId !== 'movie') {
-      try {
-        const { data: verifiedSeason } = await supabase
-          .from(seaTable)
-          .select('id')
-          .eq('id', cleanId)
-          .maybeSingle();
-
-        if (verifiedSeason && verifiedSeason.id) {
-          finalSeasonId = verifiedSeason.id;
-        }
-      } catch {
-        finalSeasonId = null;
-      }
-    }
-  }
-
-  // 3. Backup previous record state
-  let previousState: any = null;
-  if (id) {
-    try {
-      const { data: prev } = await supabase.from(epTable).select('*').eq('id', targetId).maybeSingle();
-      previousState = prev;
-      if (prev) {
-        await createAutoBackup('episode', targetId, prev);
-      }
-    } catch {}
-  }
-
-  // 4. Build single-record payload (season_id is guaranteed valid or null - never invalid string!)
-  const supabasePayload: any = {
+  const payload: Record<string, any> = {
     id: targetId,
+    animeId: targetAnimeId,
     anime_id: targetAnimeId,
-    season_id: finalSeasonId,
+    seasonId: validatedSeasonId || '',
+    season_id: validatedSeasonId || '',
+    seasonNumber: validatedSeasonNum || 1,
     season_number: validatedSeasonNum || 1,
+    episodeNumber: epNum,
     episode_number: epNum,
-    episode_title: sanitizeString(epData.title || epData.episode_title || `Episode ${epNum}`, 250),
+    title: cleanTitle,
+    episode_title: cleanTitle,
     description: sanitizeString(epData.description || '', 5000),
-    thumbnail_url: sanitizeUrl(epData.thumbnailUrl || epData.thumbnail_url || ''),
+    thumbnailUrl: cleanThumb,
+    thumbnail_url: cleanThumb,
     duration: sanitizeString(epData.duration || '24m', 50),
+    releaseDate: sanitizeString(epData.releaseDate || epData.release_date || '', 50),
     release_date: sanitizeString(epData.releaseDate || epData.release_date || '', 50),
+    server1Url: sanitizeUrl(server1),
     server1_url: sanitizeUrl(server1),
+    server2Url: sanitizeUrl(server2),
     server2_url: sanitizeUrl(server2),
+    server3Url: sanitizeUrl(server3),
     server3_url: sanitizeUrl(server3),
-    abyss_url: sanitizeUrl(server1),
-    filemoon_url: sanitizeUrl(server2),
-    vdohide_url: sanitizeUrl(server3),
     published: epData.published !== false,
-    updated_at: new Date().toISOString(),
+    isEarlyAccess: Boolean(epData.isEarlyAccess ?? epData.is_early_access),
+    is_early_access: Boolean(epData.isEarlyAccess ?? epData.is_early_access),
+    isPremiumOnly: Boolean(epData.isPremiumOnly ?? epData.is_premium_only),
+    is_premium_only: Boolean(epData.isPremiumOnly ?? epData.is_premium_only),
+    isPremium: Boolean(epData.isPremium ?? epData.is_premium ?? epData.isPremiumOnly),
+    is_premium: Boolean(epData.isPremium ?? epData.is_premium ?? epData.isPremiumOnly),
+    updatedAt: nowIso,
+    updated_at: nowIso,
   };
 
-  if (!id && !previousState) {
-    supabasePayload.created_at = new Date().toISOString();
-  }
-
-  // 5. Upsert into Supabase public.episodes table with foreign key violation safety (Requirement 7)
   try {
-    const { error: upsertErr } = await supabase.from('episodes').upsert(supabasePayload);
-    if (upsertErr) {
-      if (upsertErr.message && (upsertErr.message.includes('episodes_season_id_fkey') || upsertErr.code === '23503')) {
-        console.warn('[Supabase saveEpisode foreign key fallback]: Retrying with season_id = null');
-        supabasePayload.season_id = null;
-        const retryRes = await supabase.from('episodes').upsert(supabasePayload);
-        if (retryRes.error && !isSchemaCachePending(retryRes.error)) {
-          throw new Error(formatDbError(retryRes.error));
-        }
-        return targetId;
-      }
-      if (!isSchemaCachePending(upsertErr)) {
-        console.error(`[Supabase saveEpisode error]:`, formatDbError(upsertErr));
-        throw new Error(formatDbError(upsertErr));
-      }
+    const existing = await getDoc(doc(db, 'episodes', targetId)).catch(() => null);
+    if (!existing?.exists()) {
+      payload.views = 0;
+      payload.createdAt = Date.now();
+      payload.created_at = nowIso;
     }
-  } catch (err: any) {
-    if (!isSchemaCachePending(err)) throw new Error(formatDbError(err));
+    await setDoc(doc(db, 'episodes', targetId), payload, { merge: true });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `episodes/${targetId}`);
   }
 
-  // Invalidate episode and new drops cache
-  clearCachePrefix(`episodes_${targetAnimeId}`);
   clearCachePrefix('episodes_');
+  clearCachedData('unified_app_catalog');
   clearCachedData('all_episodes');
   clearCachedData('all_episodes_published');
   clearCachedData('all_episodes_all');
   clearCachedData('new_drops');
+  clearCachedData(`episode_${targetId}`);
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('zk_episode_published', { detail: { id: targetId, animeId: targetAnimeId } }));
@@ -2295,74 +1612,88 @@ export async function saveEpisodeBoth(epData: any, id?: string): Promise<string>
 }
 export const saveEpisode = saveEpisodeBoth;
 
-// Delete Episode from Supabase (Requirement 2 & 5)
 export async function deleteEpisodeBoth(id: string): Promise<void> {
   assertOwner('delete episodes');
-  const cleanId = String(id).trim();
+  if (!db) throw new Error('Firestore is not initialized.');
+  const cleanId = safeDocId(id);
 
-  // 1. Snapshot for recovery
   try {
-    const { data: current } = await supabase.from('episodes').select('*').eq('id', cleanId).maybeSingle();
-    if (current) {
-      await createAutoBackup('episode', cleanId, current);
-    }
-  } catch {}
-
-  // 2. Delete selected record
-  try {
-    const { error: delErr } = await supabase.from('episodes').delete().eq('id', cleanId);
-    if (delErr && !isSchemaCachePending(delErr)) {
-      console.error(`[Supabase deleteEpisode error]:`, formatDbError(delErr));
-      throw new Error(formatDbError(delErr));
-    }
-  } catch (err: any) {
-    if (!isSchemaCachePending(err)) throw new Error(formatDbError(err));
+    await deleteDoc(doc(db, 'episodes', cleanId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `episodes/${cleanId}`);
   }
 
   clearCachePrefix('episodes_');
+  clearCachedData('unified_app_catalog');
   clearCachedData('all_episodes');
   clearCachedData('all_episodes_published');
   clearCachedData('all_episodes_all');
   clearCachedData('new_drops');
+  clearCachedData(`episode_${cleanId}`);
 
-  // 3. Notify listeners
-  try {
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('zk_episode_deleted', { detail: { id: cleanId } }));
-      window.dispatchEvent(new CustomEvent('zk_episodes_changed', { detail: { id: cleanId } }));
-      window.dispatchEvent(new CustomEvent('zk_data_changed', { detail: { type: 'episode', id: cleanId } }));
-    }
-  } catch {}
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('zk_episode_deleted', { detail: { id: cleanId } }));
+    window.dispatchEvent(new CustomEvent('zk_episodes_changed', { detail: { id: cleanId } }));
+    window.dispatchEvent(new CustomEvent('zk_data_changed', { detail: { type: 'episode', id: cleanId } }));
+  }
 }
 export const deleteEpisode = deleteEpisodeBoth;
 
 // -------------------------------------------------------------
-// USER PROGRESS / CONTINUE WATCHING (SUPABASE ONLY)
+// USER PROGRESS / CONTINUE WATCHING (FIRESTORE watchHistory)
 // -------------------------------------------------------------
 
 export async function getUserProgress(userId: string): Promise<any[]> {
-  if (!userId) return [];
+  if (!userId || !db) return [];
+  const currentUid = auth?.currentUser?.uid;
+  const callerIsOwner = isOwnerEmail(auth?.currentUser?.email);
+  if (!currentUid || (currentUid !== userId && !callerIsOwner)) return [];
+
   const cacheKey = `user_progress_${userId}`;
   const cached = getCachedData<any[]>(cacheKey);
   if (cached && Array.isArray(cached)) return cached;
 
   try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('user_progress')
-        .select('*')
-        .eq('user_id', userId)
-        .order('updated_at', { ascending: false });
-    });
+    const q = query(collection(db, 'watchHistory'), where('userId', '==', userId));
+    const snap = await getDocs(q);
+    const rows = snap.docs
+      .map((d) => {
+        const data = d.data();
+        const curr = Number(data.currentTime ?? data.current_time ?? data.progress_seconds ?? 0);
+        const dur = Number(data.duration ?? data.duration_seconds ?? 1440);
+        return {
+          ...data,
+          id: d.id,
+          userId: data.userId || userId,
+          animeId: data.animeId || data.anime_id,
+          anime_id: data.animeId || data.anime_id,
+          episodeId: data.episodeId || data.episode_id,
+          episode_id: data.episodeId || data.episode_id,
+          animeTitle: data.animeTitle || data.anime_title || 'Anime',
+          anime_title: data.animeTitle || data.anime_title || 'Anime',
+          episodeTitle: data.episodeTitle || data.episode_title || '',
+          episode_title: data.episodeTitle || data.episode_title || '',
+          seasonNumber: data.seasonNumber || data.season_number || 1,
+          episodeNumber: data.episodeNumber || data.episode_number || 1,
+          posterUrl: data.posterUrl || data.poster_url || '',
+          poster_url: data.posterUrl || data.poster_url || '',
+          currentTime: curr,
+          current_time: curr,
+          duration: dur,
+          duration_seconds: dur,
+          progress_seconds: curr,
+          percentage: dur > 0 ? Math.min(100, Math.round((curr / dur) * 100)) : 0,
+          updatedAt: data.updatedAt || data.updated_at || 0,
+        };
+      })
+      .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
 
-    if (res?.data && res.data.length > 0) {
-      setCachedData(cacheKey, res.data);
-      return res.data;
-    }
-  } catch {
-    // return empty state
+    setCachedData(cacheKey, rows);
+    return rows;
+  } catch (err) {
+    console.warn('[Firestore Error - getUserProgress]:', formatDbError(err));
+    return [];
   }
-  return [];
 }
 
 export async function saveUserProgress(progress: {
@@ -2378,221 +1709,329 @@ export async function saveUserProgress(progress: {
   currentTime?: number;
   duration?: number;
 }): Promise<void> {
-  const currentUid = auth.currentUser?.uid;
-  if (!currentUid || currentUid !== progress.userId || !progress.episodeId) return;
+  const currentUid = auth?.currentUser?.uid;
+  if (!db || !currentUid || currentUid !== progress.userId || !progress.episodeId) return;
+
+  const cleanUid = safeDocId(currentUid);
+  const cleanAnimeId = safeDocId(progress.animeId);
+  const cleanEpisodeId = safeDocId(progress.episodeId);
+  const docId = `${cleanUid}_${cleanEpisodeId}`;
+
   clearCachedData(`user_progress_${progress.userId}`);
+  const currTime = Math.max(0, Number(progress.currentTime || 0));
+  const dur = Math.max(1, Number(progress.duration || 1440));
+  const pct = Math.min(100, Math.round((currTime / dur) * 100));
+  const nowIso = new Date().toISOString();
+
+  const payload = {
+    id: docId,
+    userId: currentUid,
+    user_id: currentUid,
+    animeId: cleanAnimeId,
+    anime_id: cleanAnimeId,
+    animeTitle: sanitizeString(progress.animeTitle || '', 300),
+    anime_title: sanitizeString(progress.animeTitle || '', 300),
+    episodeId: cleanEpisodeId,
+    episode_id: cleanEpisodeId,
+    episodeTitle: sanitizeString(progress.episodeTitle || '', 250),
+    episode_title: sanitizeString(progress.episodeTitle || '', 250),
+    seasonId: sanitizeString(progress.seasonId || 's1', 128),
+    season_id: sanitizeString(progress.seasonId || 's1', 128),
+    seasonNumber: Number(progress.seasonNumber || 1),
+    season_number: Number(progress.seasonNumber || 1),
+    episodeNumber: Number(progress.episodeNumber || 1),
+    episode_number: Number(progress.episodeNumber || 1),
+    posterUrl: sanitizeUrl(progress.posterUrl || ''),
+    poster_url: sanitizeUrl(progress.posterUrl || ''),
+    currentTime: currTime,
+    current_time: currTime,
+    duration: dur,
+    duration_seconds: dur,
+    progress_seconds: currTime,
+    percentage: pct,
+    updatedAt: nowIso,
+    updated_at: nowIso,
+    last_watched: nowIso,
+  };
+
   try {
-    await supabase.from('user_progress').upsert({
-      user_id: progress.userId,
-      anime_id: sanitizeString(progress.animeId, 100),
-      anime_title: sanitizeString(progress.animeTitle || '', 300),
-      episode_id: sanitizeString(progress.episodeId, 100),
-      episode_title: sanitizeString(progress.episodeTitle || '', 250),
-      season_id: sanitizeString(progress.seasonId || 's1', 100),
-      season_number: progress.seasonNumber || 1,
-      episode_number: progress.episodeNumber || 1,
-      poster_url: sanitizeUrl(progress.posterUrl || ''),
-      current_time: progress.currentTime || 0,
-      duration: progress.duration || 1440,
-      updated_at: new Date().toISOString(),
-    });
-  } catch {
-    // ignore
+    await setDoc(doc(db, 'watchHistory', docId), payload, { merge: true });
+  } catch (err) {
+    console.warn('[Firestore Error - saveUserProgress]:', formatDbError(err));
   }
 }
 
 export async function deleteUserProgress(userId: string, episodeId: string): Promise<void> {
-  const currentUid = auth.currentUser?.uid;
-  if (!currentUid || currentUid !== userId || !episodeId) return;
+  const currentUid = auth?.currentUser?.uid;
+  if (!db || !currentUid || currentUid !== userId || !episodeId) return;
+
   clearCachedData(`user_progress_${userId}`);
+  const docId = `${safeDocId(currentUid)}_${safeDocId(episodeId)}`;
   try {
-    await supabase.from('user_progress').delete().match({ user_id: userId, episode_id: episodeId });
-  } catch {
-    // ignore
+    await deleteDoc(doc(db, 'watchHistory', docId));
+  } catch (err) {
+    console.warn('[Firestore Error - deleteUserProgress]:', formatDbError(err));
+  }
+}
+
+export async function clearUserWatchHistory(userId: string): Promise<void> {
+  const currentUid = auth?.currentUser?.uid;
+  if (!db || !currentUid || currentUid !== userId) return;
+  clearCachedData(`user_progress_${userId}`);
+
+  try {
+    const snap = await getDocs(query(collection(db, 'watchHistory'), where('userId', '==', userId)));
+    await Promise.all(snap.docs.map((d) => deleteDoc(doc(db, 'watchHistory', d.id))));
+  } catch (err) {
+    console.warn('[Firestore Error - clearUserWatchHistory]:', formatDbError(err));
   }
 }
 
 // -------------------------------------------------------------
-// WATCH HISTORY, FAVORITES & WATCHLIST (SUPABASE ONLY WITH CACHE)
+// WATCH HISTORY, FAVORITES & WATCHLIST (FIRESTORE)
 // -------------------------------------------------------------
 
 export async function getWatchHistory(userId: string): Promise<any[]> {
-  if (!userId) return [];
-  try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('user_progress')
-        .select('*')
-        .eq('user_id', userId)
-        .order('updated_at', { ascending: false })
-        .limit(50);
-    });
-    if (res?.data) return res.data;
-  } catch {
-    // return empty state
-  }
-  return [];
+  return await getUserProgress(userId);
 }
 
 export async function getFavorites(userId: string): Promise<any[]> {
-  if (!userId) return [];
+  if (!userId || !db || !auth?.currentUser || auth.currentUser.uid !== userId) return [];
   const cacheKey = `favorites_${userId}`;
   const cached = getCachedData<any[]>(cacheKey);
   if (cached && Array.isArray(cached)) return cached;
 
   try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('favorites')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-    });
-    if (res?.data) {
-      setCachedData(cacheKey, res.data);
-      return res.data;
-    }
-  } catch {
-    // return empty state
+    const snap = await getDocs(query(collection(db, 'favorites'), where('userId', '==', userId)));
+    const rows: any[] = snap.docs
+      .map((d): any => {
+        const data = d.data();
+        return {
+          ...data,
+          id: data.animeId || d.id,
+          docId: d.id,
+          anime_id: data.animeId || data.anime_id,
+          title: data.animeTitle || data.title || 'Anime',
+          poster_url: data.posterUrl || data.poster_url || '',
+        };
+      })
+      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+
+    setCachedData(cacheKey, rows);
+    return rows;
+  } catch (err) {
+    console.warn('[Firestore Error - getFavorites]:', formatDbError(err));
+    return [];
   }
-  return [];
 }
 
 export async function addFavorite(
   userId: string,
   anime: { id: string; title: string; posterUrl?: string }
 ): Promise<void> {
-  const currentUid = auth.currentUser?.uid;
-  if (!currentUid || currentUid !== userId || !anime.id) return;
+  const currentUid = auth?.currentUser?.uid;
+  if (!db || !currentUid || currentUid !== userId || !anime.id) return;
+
+  const cleanUid = safeDocId(currentUid);
+  const cleanAnimeId = safeDocId(anime.id);
+  const docId = `${cleanUid}_${cleanAnimeId}`;
+
   clearCachedData(`favorites_${userId}`);
+  const cleanTitle = sanitizeString(anime.title, 300);
+  const cleanPoster = sanitizeUrl(anime.posterUrl || '');
+
   try {
-    await supabase.from('favorites').upsert({
-      user_id: userId,
-      anime_id: sanitizeString(anime.id, 100),
-      anime_title: sanitizeString(anime.title, 300),
-      poster_url: sanitizeUrl(anime.posterUrl || ''),
+    await setDoc(doc(db, 'favorites', docId), {
+      id: docId,
+      userId: currentUid,
+      user_id: currentUid,
+      animeId: cleanAnimeId,
+      anime_id: cleanAnimeId,
+      animeTitle: cleanTitle,
+      anime_title: cleanTitle,
+      title: cleanTitle,
+      posterUrl: cleanPoster,
+      poster_url: cleanPoster,
+      createdAt: Date.now(),
       created_at: new Date().toISOString(),
     });
-  } catch {
-    // ignore
+    trackFirebaseAnalyticsEvent('add_to_favorites', { anime_id: cleanAnimeId }).catch(() => {});
+  } catch (err) {
+    console.warn('[Firestore Error - addFavorite]:', formatDbError(err));
   }
 }
 
 export async function removeFavorite(userId: string, animeId: string): Promise<void> {
-  const currentUid = auth.currentUser?.uid;
-  if (!currentUid || currentUid !== userId || !animeId) return;
+  const currentUid = auth?.currentUser?.uid;
+  if (!db || !currentUid || currentUid !== userId || !animeId) return;
+
   clearCachedData(`favorites_${userId}`);
+  const docId = `${safeDocId(currentUid)}_${safeDocId(animeId)}`;
   try {
-    await supabase.from('favorites').delete().match({ user_id: userId, anime_id: animeId });
-  } catch {
-    // ignore
+    await deleteDoc(doc(db, 'favorites', docId));
+  } catch (err) {
+    console.warn('[Firestore Error - removeFavorite]:', formatDbError(err));
   }
 }
 
 export async function isFavorite(userId: string, animeId: string): Promise<boolean> {
-  if (!userId || !animeId) return false;
-  // Check cached favorites first
-  const cached = getCachedData<any[]>(`favorites_${userId}`);
-  if (cached && Array.isArray(cached)) {
-    return cached.some((f: any) => f.anime_id === animeId || f.id === animeId);
-  }
-
-  try {
-    const { data } = await supabase
-      .from('favorites')
-      .select('id')
-      .match({ user_id: userId, anime_id: animeId })
-      .maybeSingle();
-    return Boolean(data);
-  } catch {
-    return false;
-  }
+  if (!userId || !animeId || !auth?.currentUser) return false;
+  const favs = await getFavorites(userId);
+  return favs.some((f: any) => f.animeId === animeId || f.anime_id === animeId || f.id === animeId);
 }
 
 export async function getWatchlist(userId: string): Promise<any[]> {
-  if (!userId) return [];
+  if (!userId || !db || !auth?.currentUser || auth.currentUser.uid !== userId) return [];
   const cacheKey = `watchlist_${userId}`;
   const cached = getCachedData<any[]>(cacheKey);
   if (cached && Array.isArray(cached)) return cached;
 
   try {
-    const res = await executeSupabaseWithRetry(async () => {
-      return await supabase
-        .from('watchlist')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-    });
-    if (res?.data) {
-      setCachedData(cacheKey, res.data);
-      return res.data;
-    }
-  } catch {
-    // return empty state
+    const snap = await getDocs(query(collection(db, 'watchlist'), where('userId', '==', userId)));
+    const rows: any[] = snap.docs
+      .map((d): any => {
+        const data = d.data();
+        return {
+          ...data,
+          id: data.animeId || d.id,
+          docId: d.id,
+          anime_id: data.animeId || data.anime_id,
+          title: data.animeTitle || data.title || 'Anime',
+          poster_url: data.posterUrl || data.poster_url || '',
+        };
+      })
+      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+
+    setCachedData(cacheKey, rows);
+    return rows;
+  } catch (err) {
+    console.warn('[Firestore Error - getWatchlist]:', formatDbError(err));
+    return [];
   }
-  return [];
 }
 
 export async function addToWatchlist(
   userId: string,
   anime: { id: string; title: string; posterUrl?: string; status?: string }
 ): Promise<void> {
-  const currentUid = auth.currentUser?.uid;
-  if (!currentUid || currentUid !== userId || !anime.id) return;
+  const currentUid = auth?.currentUser?.uid;
+  if (!db || !currentUid || currentUid !== userId || !anime.id) return;
+
+  const cleanUid = safeDocId(currentUid);
+  const cleanAnimeId = safeDocId(anime.id);
+  const docId = `${cleanUid}_${cleanAnimeId}`;
+
   clearCachedData(`watchlist_${userId}`);
+  const cleanTitle = sanitizeString(anime.title, 300);
+  const cleanPoster = sanitizeUrl(anime.posterUrl || '');
+
   try {
-    await supabase.from('watchlist').upsert({
-      user_id: userId,
-      anime_id: sanitizeString(anime.id, 100),
-      anime_title: sanitizeString(anime.title, 300),
-      poster_url: sanitizeUrl(anime.posterUrl || ''),
+    await setDoc(doc(db, 'watchlist', docId), {
+      id: docId,
+      userId: currentUid,
+      user_id: currentUid,
+      animeId: cleanAnimeId,
+      anime_id: cleanAnimeId,
+      animeTitle: cleanTitle,
+      anime_title: cleanTitle,
+      title: cleanTitle,
+      posterUrl: cleanPoster,
+      poster_url: cleanPoster,
       status: sanitizeString(anime.status || 'Plan to Watch', 50),
+      createdAt: Date.now(),
       created_at: new Date().toISOString(),
     });
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('[Firestore Error - addToWatchlist]:', formatDbError(err));
   }
 }
 
 export async function removeFromWatchlist(userId: string, animeId: string): Promise<void> {
-  const currentUid = auth.currentUser?.uid;
-  if (!currentUid || currentUid !== userId || !animeId) return;
+  const currentUid = auth?.currentUser?.uid;
+  if (!db || !currentUid || currentUid !== userId || !animeId) return;
+
   clearCachedData(`watchlist_${userId}`);
+  const docId = `${safeDocId(currentUid)}_${safeDocId(animeId)}`;
   try {
-    await supabase.from('watchlist').delete().match({ user_id: userId, anime_id: animeId });
-  } catch {
-    // ignore
+    await deleteDoc(doc(db, 'watchlist', docId));
+  } catch (err) {
+    console.warn('[Firestore Error - removeFromWatchlist]:', formatDbError(err));
   }
 }
 
 export async function isInWatchlist(userId: string, animeId: string): Promise<boolean> {
-  if (!userId || !animeId) return false;
-  try {
-    const { data } = await supabase
-      .from('watchlist')
-      .select('id')
-      .match({ user_id: userId, anime_id: animeId })
-      .maybeSingle();
-    return Boolean(data);
-  } catch {
-    return false;
-  }
+  if (!userId || !animeId || !auth?.currentUser) return false;
+  const list = await getWatchlist(userId);
+  return list.some((w: any) => w.animeId === animeId || w.anime_id === animeId || w.id === animeId);
 }
 
 // -------------------------------------------------------------
-// MIGRATION HELPER (NO-OP: SUPABASE IS 100% PRIMARY DATABASE)
+// BANNERS, COMMENTS, RATINGS, NOTIFICATIONS, PREMIUM PLANS & PAYMENTS
 // -------------------------------------------------------------
 
-export async function migrateFirebaseToSupabase(_force = false): Promise<{
-  animeCount: number;
-  seasonsCount: number;
-  episodesCount: number;
-  status: string;
-}> {
-  return { 
-    animeCount: 0, 
-    seasonsCount: 0, 
-    episodesCount: 0, 
-    status: 'Supabase is primary database' 
-  };
+export async function getActiveBanners(): Promise<any[]> {
+  if (!db) return [];
+  try {
+    const snap = await getDocs(query(collection(db, 'banners'), where('active', '==', true)));
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a: any, b: any) => Number(a.order || 0) - Number(b.order || 0));
+  } catch {
+    return [];
+  }
+}
+
+export async function getCommentsByAnimeId(animeId: string): Promise<any[]> {
+  if (!db || !animeId) return [];
+  try {
+    const snap = await getDocs(query(collection(db, 'comments'), where('animeId', '==', animeId)));
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a: any, b: any) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  } catch {
+    return [];
+  }
+}
+
+export async function addAnimeComment(params: {
+  animeId: string;
+  episodeId?: string;
+  userId: string;
+  userName: string;
+  userPhoto?: string;
+  text: string;
+}): Promise<string | null> {
+  if (!db || !auth?.currentUser || auth.currentUser.uid !== params.userId) return null;
+  const docRef = await addDoc(collection(db, 'comments'), {
+    animeId: safeDocId(params.animeId),
+    ...(params.episodeId ? { episodeId: safeDocId(params.episodeId) } : {}),
+    userId: auth.currentUser.uid,
+    userName: sanitizeString(params.userName, 120),
+    userPhoto: sanitizeUrl(params.userPhoto || ''),
+    text: sanitizeString(params.text, 2000),
+    createdAt: Date.now(),
+  });
+  return docRef.id;
+}
+
+export async function getPublicNotifications(): Promise<any[]> {
+  if (!db) return [];
+  try {
+    const snap = await getDocs(query(collection(db, 'notifications'), where('isPublic', '==', true)));
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a: any, b: any) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  } catch {
+    return [];
+  }
+}
+
+export async function getActivePremiumPlans(): Promise<any[]> {
+  if (!db) return [];
+  try {
+    const snap = await getDocs(query(collection(db, 'premiumPlans'), where('active', '==', true)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch {
+    return [];
+  }
 }

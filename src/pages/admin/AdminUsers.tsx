@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../../lib/supabase';
 import { db } from '../../lib/firebase';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, doc, getDocs, updateDoc, deleteDoc } from 'firebase/firestore';
+import { getUserProgress } from '../../lib/dataService';
 import { 
   Users, Search as SearchIcon, Trash2, Ban, CheckCircle, 
   Edit2, X, Save, History, Clock, Film, Play, UserCheck, 
@@ -41,75 +41,36 @@ export default function AdminUsers() {
       setError(null);
       const userList: User[] = [];
 
-      // 1. Fetch from Supabase users table
-      try {
-        const { data: sData } = await supabase
-          .from('users')
-          .select('*')
-          .order('created_at', { ascending: false });
-
-        if (sData && sData.length > 0) {
-          sData.forEach((su: any) => {
-            const isOwner = su.email === 'zkdubbingstudio@gmail.com' || su.role === 'owner';
-            userList.push({
-              uid: su.id,
-              id: su.id,
-              email: su.email || '',
-              displayName: su.full_name || su.username || su.displayName || 'Anime Fan',
-              photoURL: su.photo_url || su.photoURL || su.avatar_url || '',
-              role: isOwner ? 'owner' : 'user',
-              isBanned: Boolean(su.is_banned || su.isBanned),
-              createdAt: su.created_at ? new Date(su.created_at).getTime() : Date.now(),
-              settings: su.settings,
-            });
+      // Fetch from Cloud Firestore users collection
+      if (db) {
+        const snapshot = await getDocs(collection(db, 'users'));
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          const email = (data.email || '').toLowerCase();
+          const isOwner = email === 'zkdubbingstudio@gmail.com' || data.role === 'owner';
+          const rawCreated = data.createdAt || data.created_at;
+          const createdTs = rawCreated?.toMillis
+            ? rawCreated.toMillis()
+            : typeof rawCreated === 'number'
+            ? rawCreated
+            : rawCreated
+            ? new Date(rawCreated).getTime()
+            : Date.now();
+          userList.push({
+            uid: docSnap.id,
+            id: docSnap.id,
+            email: data.email || '',
+            displayName: data.full_name || data.displayName || data.name || data.username || 'Anime Fan',
+            photoURL: data.photoURL || data.profilePhoto || data.photo_url || data.avatarUrl || '',
+            role: isOwner ? 'owner' : 'user',
+            isBanned: Boolean(data.isBanned ?? data.is_banned),
+            createdAt: isNaN(createdTs) ? Date.now() : createdTs,
+            settings: data.settings,
           });
-        }
-      } catch (sErr) {
-        console.warn('Supabase users fetch warning:', sErr);
+        });
       }
 
-      // 2. Fallback to Firestore users if Supabase returned no users
-      if (userList.length === 0 && db) {
-        try {
-          const snapshot = await getDocs(collection(db, 'users'));
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data();
-            const email = (data.email || '').toLowerCase();
-            const isOwner = email === 'zkdubbingstudio@gmail.com' || data.role === 'owner';
-            userList.push({
-              uid: docSnap.id,
-              id: docSnap.id,
-              email: data.email || '',
-              displayName: data.full_name || data.displayName || data.username || 'Anime Fan',
-              photoURL: data.photoURL || data.profilePhoto || '',
-              role: isOwner ? 'owner' : 'user',
-              isBanned: Boolean(data.isBanned),
-              createdAt: data.createdAt
-                ? (typeof data.createdAt === 'number' ? data.createdAt : new Date(data.createdAt).getTime())
-                : Date.now(),
-              settings: data.settings,
-            });
-          });
-        } catch (fErr) {
-          console.warn('Firestore fallback fetch warning:', fErr);
-        }
-      }
-
-      if (userList.length > 0) {
-        setUsers(userList);
-      } else {
-        // Fallback owner account if no other accounts registered yet
-        setUsers([
-          {
-            uid: 'admin-zk',
-            email: 'zkdubbingstudio@gmail.com',
-            displayName: 'ZK Dubbing Studio Admin',
-            photoURL: 'https://i.ibb.co/2Yp3CDq9/file-000000006f2c8211b20c6bedc9f9ac12.png',
-            role: 'owner',
-            createdAt: Date.now() - 1000 * 60 * 60 * 24 * 30,
-          },
-        ]);
-      }
+      setUsers(userList);
     } catch (err: any) {
       console.warn(err.message || err);
     } finally {
@@ -122,44 +83,47 @@ export default function AdminUsers() {
   }, []);
 
   const handleToggleBan = async (user: any) => {
-    if (user.role === 'owner' || user.role === 'admin' || user.email === 'zkdubbingstudio@gmail.com') {
+    if (user.role === 'owner' || user.role === 'admin' || user.email?.toLowerCase() === 'zkdubbingstudio@gmail.com') {
       alert('Cannot modify studio owner account.');
       return;
     }
     const userId = user.uid || user.id;
+    if (!db || !userId) return;
     try {
       const nextBanned = !user.isBanned;
-      try {
-        await supabase.from('users').update({ isBanned: nextBanned }).eq('id', userId);
-      } catch {}
+      await updateDoc(doc(db, 'users', userId), {
+        isBanned: nextBanned,
+        is_banned: nextBanned,
+        updatedAt: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
 
       setUsers(prev => prev.map(u => (u.id === userId || u.uid === userId) ? { ...u, isBanned: nextBanned } : u));
       logAdminActivity('Toggled User Ban', 'user', `${user.email} -> ${nextBanned ? 'Banned' : 'Active'}`);
       setSuccessMsg(`User status updated to ${nextBanned ? 'Banned' : 'Active'}.`);
       setTimeout(() => setSuccessMsg(null), 3000);
-    } catch {
-      alert('Error updating user ban status in database.');
+    } catch (err: any) {
+      alert(err?.message || 'Error updating user ban status in Cloud Firestore.');
     }
   };
 
   const handleDelete = async (user: any) => {
-    if (user.role === 'owner' || user.role === 'admin' || user.email === 'zkdubbingstudio@gmail.com') {
+    if (user.role === 'owner' || user.role === 'admin' || user.email?.toLowerCase() === 'zkdubbingstudio@gmail.com') {
       alert('Cannot delete studio owner account.');
       return;
     }
     if (!window.confirm(`Permanently remove user account ${user.email}?`)) return;
     const userId = user.uid || user.id;
+    if (!db || !userId) return;
     try {
-      try {
-        await supabase.from('users').delete().eq('id', userId);
-      } catch {}
+      await deleteDoc(doc(db, 'users', userId));
 
       setUsers(prev => prev.filter(u => (u.id || u.uid) !== userId));
       logAdminActivity('Deleted User Account', 'user', `Deleted: ${user.email}`);
       setSuccessMsg('User successfully deleted.');
       setTimeout(() => setSuccessMsg(null), 3000);
-    } catch {
-      alert('Failed to delete user.');
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete user.');
     }
   };
 
@@ -169,21 +133,23 @@ export default function AdminUsers() {
     const userId = user?.uid || user?.id;
 
     try {
-      const { data } = await supabase
-        .from('user_progress')
-        .select('*')
-        .eq('user_id', userId)
-        .order('updated_at', { ascending: false });
+      const data = userId ? await getUserProgress(userId) : [];
 
-      if (data && data.length > 0) {
+      if (data.length > 0) {
         setUserWatchHistory(
-          data.map((item: any) => ({
-            id: item.id || item.episode_id,
-            animeTitle: item.anime_title || 'Anime Series',
-            episodeNumber: item.episode_number || 1,
-            watchedAt: item.updated_at ? new Date(item.updated_at).toLocaleDateString() : 'Recently',
-            progressPercentage: item.duration > 0 ? Math.min(100, Math.round(((item.current_time || 0) / item.duration) * 100)) : 100,
-          }))
+          data.map((item: any) => {
+            const watchedSec = Number(item.currentTime ?? item.current_time ?? item.progress_seconds ?? 0);
+            const totalSec = Number(item.duration ?? item.duration_seconds ?? 0);
+            const pct = Number(item.percentage) || (totalSec > 0 ? Math.min(100, Math.round((watchedSec / totalSec) * 100)) : 0);
+            const updatedVal = item.updatedAt || item.updated_at;
+            return {
+              id: item.id || item.episodeId || item.episode_id,
+              animeTitle: item.animeTitle || item.anime_title || 'Anime Series',
+              episodeNumber: item.episodeNumber || item.episode_number || 1,
+              watchedAt: updatedVal ? new Date(updatedVal).toLocaleDateString() : 'Recently',
+              progressPercentage: pct,
+            };
+          })
         );
       } else {
         setUserWatchHistory([]);
@@ -201,20 +167,24 @@ export default function AdminUsers() {
   };
 
   const handleSaveUser = async () => {
-    if (!editingUser) return;
+    if (!editingUser || !db) return;
     setSaving(true);
     const userId = editingUser.id || editingUser.uid;
     try {
-      try {
-        await supabase.from('users').update({ photo_url: avatarUrl, photoURL: avatarUrl }).eq('id', userId);
-      } catch {}
+      await updateDoc(doc(db, 'users', userId), {
+        photoURL: avatarUrl,
+        profilePhoto: avatarUrl,
+        photo_url: avatarUrl,
+        updatedAt: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
 
       setUsers(prev => prev.map(u => (u.id === userId || u.uid === userId) ? { ...u, photoURL: avatarUrl } : u));
       setEditingUser(null);
       setSuccessMsg('User profile updated.');
       setTimeout(() => setSuccessMsg(null), 3000);
-    } catch {
-      alert('Error saving avatar.');
+    } catch (err: any) {
+      alert(err?.message || 'Error saving avatar.');
     } finally {
       setSaving(false);
     }

@@ -4,10 +4,11 @@ import {
   Check, AlertCircle, Sparkles, Send, Youtube, MessageSquare, Palette, HardDrive,
   Bell, Volume2, VolumeX, UserPlus, Zap
 } from 'lucide-react';
-import { getAdminSettings, saveAdminSettings, AdminWebsiteSettings } from '../../lib/adminSettingsStore';
+import { getAdminSettings, fetchAdminSettings, saveAdminSettingsAsync, AdminWebsiteSettings } from '../../lib/adminSettingsStore';
 import { getAllAnime, getAllSeasons, getAllEpisodes, saveAnimeBoth, saveSeasonBoth, saveEpisodeBoth } from '../../lib/dataService';
 import { logAdminActivity } from '../../lib/activityLogger';
 import { useOwnerNotificationsStore, dispatchOwnerNotification } from '../../lib/ownerNotificationService';
+import { assertOwner, sanitizeRecord } from '../../lib/security';
 
 export default function AdminSettings() {
   const [settings, setSettings] = useState<AdminWebsiteSettings>(getAdminSettings());
@@ -18,15 +19,19 @@ export default function AdminSettings() {
   const [importStatus, setImportStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    setSettings(getAdminSettings());
+    fetchAdminSettings().then(setSettings).catch(() => {});
   }, []);
 
-  const handleSave = (e: FormEvent) => {
+  const handleSave = async (e: FormEvent) => {
     e.preventDefault();
-    saveAdminSettings(settings);
-    logAdminActivity('Updated System Settings', 'settings', 'Website branding, theme, or social links changed');
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    try {
+      await saveAdminSettingsAsync(settings);
+      logAdminActivity('Updated System Settings', 'settings', 'Website branding, theme, or social links changed');
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to save settings.');
+    }
   };
 
   const handleClearCache = () => {
@@ -87,7 +92,21 @@ export default function AdminSettings() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!confirm('Are you sure you want to restore this backup? This will sync entries to Firestore and Supabase.')) {
+    try {
+      assertOwner('restore database backups');
+    } catch (authErr: any) {
+      alert(authErr.message || 'Only verified owner can restore backups.');
+      e.target.value = '';
+      return;
+    }
+
+    if (!file.name.toLowerCase().endsWith('.json') || file.size > 50 * 1024 * 1024) {
+      alert('Invalid backup file. Must be a valid JSON file under 50MB.');
+      e.target.value = '';
+      return;
+    }
+
+    if (!confirm('Are you sure you want to restore this backup? This will sync entries to Cloud Firestore.')) {
       e.target.value = '';
       return;
     }
@@ -97,13 +116,14 @@ export default function AdminSettings() {
 
     try {
       const text = await file.text();
-      const json = JSON.parse(text);
+      const rawJson = JSON.parse(text);
+      const json = sanitizeRecord(rawJson);
 
       if (!json.data || !json.data.anime) {
         throw new Error('Invalid backup file structure.');
       }
 
-      setImportStatus('Syncing anime, seasons, and episodes to Firestore & Supabase...');
+      setImportStatus('Syncing anime, seasons, and episodes to Cloud Firestore...');
 
       // Restore anime
       for (const a of json.data.anime || []) {
@@ -404,7 +424,7 @@ export default function AdminSettings() {
                   <Download className="w-4 h-4 text-emerald-400" /> Export Database Backup
                 </h3>
                 <p className="text-xs text-white/50 mb-4">
-                  Downloads a complete JSON file containing all Anime, Seasons, and Episodes from Firestore &amp; Supabase.
+                  Downloads a complete JSON file containing all Anime, Seasons, and Episodes from Cloud Firestore.
                 </p>
               </div>
 
@@ -426,7 +446,7 @@ export default function AdminSettings() {
                   <Upload className="w-4 h-4 text-cyan-400" /> Restore Database Backup
                 </h3>
                 <p className="text-xs text-white/50 mb-4">
-                  Upload a previously exported backup file to restore records directly into Firestore &amp; Supabase.
+                  Upload a previously exported backup file to restore records directly into Cloud Firestore.
                 </p>
               </div>
 

@@ -8,10 +8,8 @@ import {
   getTrendingAnime,
   getNewDrops,
   getAllAnime,
-  isSchemaCachePending,
-  getActiveAnimeTable,
+  verifyFirestoreHealth,
 } from '../lib/dataService';
-import { checkSupabaseConnection, supabaseUrl } from '../lib/supabase';
 import { getCachedData } from '../lib/cache';
 import HeroSlider from '../components/HeroSlider';
 import AnimeCard3D from '../components/AnimeCard3D';
@@ -67,10 +65,10 @@ export default function Home() {
     setRetrying(true);
 
     try {
-      // Non-blocking background health check so slow preflights don't block the UI
-      checkSupabaseConnection().then((health) => {
+      // Non-blocking background health check
+      verifyFirestoreHealth().then((health) => {
         if (!health.ok) {
-          console.warn('[Supabase Pre-flight Notice]:', health.message);
+          console.warn('[Firestore Pre-flight Notice]:', health.details);
         }
       }).catch(() => {});
 
@@ -210,8 +208,8 @@ export default function Home() {
           </div>
 
           <p className="text-xs text-silver-dark leading-relaxed">
-            Target Host: <span className="font-mono text-cyan-300">{supabaseUrl}</span><br />
-            If your Supabase project was paused due to inactivity, restore it in the Supabase Dashboard, then tap retry.
+            Cloud Database: <span className="font-mono text-cyan-300">Cloud Firestore</span><br />
+            Please check your internet connection and tap retry.
           </p>
 
           <button
@@ -235,7 +233,7 @@ export default function Home() {
       {/* Main Content Sections */}
       <div className="max-w-7xl mx-auto w-full space-y-10 sm:space-y-14">
         
-        {/* 2. Continue Watching (Interactive / Logged-in Supabase synced) */}
+        {/* 2. Continue Watching (Interactive / Logged-in Firestore synced) */}
         <ContinueWatchingRow />
 
         {/* 3. New Drops Carousel with 3D Anime Cards */}

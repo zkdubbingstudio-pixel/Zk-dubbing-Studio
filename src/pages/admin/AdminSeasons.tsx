@@ -93,14 +93,14 @@ export default function AdminSeasons() {
       await saveSeasonBoth(seasonPayload, editingId || undefined);
       logAdminActivity(editingId ? 'Updated Season' : 'Created Season', 'season', `Arc: ${title || `Season ${seasonNumber}`}`);
 
-      setSuccessMsg(editingId ? 'Season updated in Firestore & Supabase!' : 'Season registered in Firestore & Supabase!');
+      setSuccessMsg(editingId ? 'Season updated in Cloud Firestore!' : 'Season registered in Cloud Firestore!');
       setTimeout(() => setSuccessMsg(null), 3500);
 
       setShowForm(false);
       resetForm();
       await fetchData();
     } catch (err: any) {
-      console.error("[Supabase Real Error - save season]:", err);
+      console.error("[Firestore Error - save season]:", err);
       const exactMsg = formatDbError(err);
       setError(`Database Error: ${exactMsg}`);
     } finally {
@@ -109,7 +109,7 @@ export default function AdminSeasons() {
   };
 
   const handleDelete = async (id: string, seasonName: string) => {
-    if (window.confirm(`Are you sure you want to delete ${seasonName} from Firestore and Supabase?`)) {
+    if (window.confirm(`Are you sure you want to delete ${seasonName} from Cloud Firestore?`)) {
       try {
         await deleteSeasonBoth(id);
         setSeasons(prev => prev.filter(s => s.id !== id));
@@ -117,7 +117,7 @@ export default function AdminSeasons() {
         setSuccessMsg('Season deleted successfully.');
         setTimeout(() => setSuccessMsg(null), 3000);
       } catch (err: any) {
-        console.error("[Supabase Real Error - delete season]:", err);
+        console.error("[Firestore Error - delete season]:", err);
         const exactMsg = formatDbError(err);
         setError(`Database Error: ${exactMsg}`);
       }
@@ -148,7 +148,7 @@ export default function AdminSeasons() {
         saveSeasonBoth({ ...currentItem, order: targetOrder }, currentItem.id),
         saveSeasonBoth({ ...targetItem, order: currentOrder }, targetItem.id),
       ]);
-      setSuccessMsg('Season order updated in both databases.');
+      setSuccessMsg('Season order updated in Cloud Firestore.');
       setTimeout(() => setSuccessMsg(null), 2500);
     } catch {
       setError('Failed to persist new season order.');

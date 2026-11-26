@@ -6,7 +6,7 @@
  * 2. Automatic retry logic with cache-busting and CDN alternate mirrors.
  * 3. Never poisons cache on transient network errors.
  * 4. Resolves ImgBB viewer and direct CDN links.
- * 5. Preconnects to popular anime image hosts (Catbox, ImgBB, Supabase).
+ * 5. Preconnects to popular anime image hosts (Catbox, ImgBB, Firebase Storage).
  * 6. Responsive banner and poster preservation without stretching or distortion.
  * 7. Strict episode image priority: episode.thumbnail -> episode.poster -> anime.poster.
  */
@@ -284,14 +284,13 @@ export function getOptimizedWebPUrl(url?: string | null, type: 'poster' | 'banne
     return clean;
   }
 
-  // Supabase Storage Render API (automatic native WebP conversion)
-  if (clean.includes('/storage/v1/object/public/')) {
-    const width = type === 'banner' ? 1280 : (type === 'thumbnail' ? 360 : 400);
-    return clean.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/') + `?width=${width}&format=webp&quality=75`;
+  // Firebase Storage URLs carry signed download tokens and are already compressed to WebP on upload
+  if (clean.includes('firebasestorage.googleapis.com')) {
+    return clean;
   }
 
   // Cloudflare-backed open WebP compression edge service (wsrv.nl)
-  // Compresses 1.5MB images down to ~30-40KB WebP (75-85% compression ratio)
+  // Compresses large external images down to lightweight WebP
   try {
     const width = type === 'banner' ? 1200 : (type === 'thumbnail' ? 360 : 400);
     return `https://wsrv.nl/?url=${encodeURIComponent(clean)}&output=webp&q=75&w=${width}&we`;
@@ -311,7 +310,8 @@ export function preconnectImageOrigins(): void {
     'https://i.ibb.co',
     'https://i.ibb.co.com',
     'https://files.catbox.moe',
-    'https://rwioavitlgzyrbgivwzi.supabase.co',
+    'https://firebasestorage.googleapis.com',
+    'https://firestore.googleapis.com',
     'https://lh3.googleusercontent.com',
   ];
 

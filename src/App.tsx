@@ -6,7 +6,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, lazy, Suspense } from 'react';
 import { useAuthStore } from './store/authStore';
 import { auth, onAuthStateChanged } from './lib/firebase';
-import { loadUserProfileFromSupabase } from './lib/authService';
+import { loadUserProfileFromFirestore } from './lib/authService';
 
 import RootLayout from './layouts/RootLayout';
 import AdminLayout from './layouts/AdminLayout';
@@ -52,14 +52,15 @@ export default function App() {
         if (fbUser) {
           setFirebaseUser(fbUser);
           try {
-            const userProfile = await loadUserProfileFromSupabase(
+            const userProfile = await loadUserProfileFromFirestore(
               fbUser.uid,
               fbUser.email,
-              fbUser.displayName
+              fbUser.displayName,
+              fbUser.photoURL
             );
             setUser(userProfile);
           } catch (err) {
-            console.warn('Notice loading user profile from Supabase:', err);
+            console.warn('Notice loading user profile from Firestore:', err);
           }
         } else {
           setFirebaseUser(null);

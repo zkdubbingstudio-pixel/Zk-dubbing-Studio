@@ -2,86 +2,416 @@
   "entities": {
     "User": {
       "title": "User",
-      "description": "Registered user profile with role, email, and preferences",
+      "description": "Registered user profile with role, avatar, subscription tier, and preferences",
       "type": "object",
       "properties": {
-        "uid": { "type": "string" },
-        "email": { "type": "string" },
-        "name": { "type": "string" },
-        "displayName": { "type": "string" },
-        "photoURL": { "type": "string" },
-        "profilePhoto": { "type": "string" },
-        "role": { "type": "string", "enum": ["user", "admin"] },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "email": { "type": "string", "maxLength": 150 },
+        "name": { "type": "string", "maxLength": 120 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "full_name": { "type": "string", "maxLength": 120 },
+        "photoURL": { "type": "string", "maxLength": 2048 },
+        "profilePhoto": { "type": "string", "maxLength": 2048 },
+        "role": { "type": "string", "enum": ["user", "owner", "admin"] },
+        "isBanned": { "type": "boolean" },
+        "isPremium": { "type": "boolean" },
+        "premiumTier": { "type": "string", "enum": ["free", "pro", "vip"] },
         "createdAt": { "type": "number" },
-        "lastLogin": { "type": "string" },
-        "lastLoginAt": { "type": "string" }
+        "lastLogin": { "type": "string", "maxLength": 64 },
+        "settings": { "type": "object" }
       },
-      "required": ["uid", "email"]
+      "required": ["uid", "email", "role", "createdAt"]
     },
     "Anime": {
       "title": "Anime",
-      "description": "Anime title details, metadata and media assets",
+      "description": "Anime series or movie metadata and artwork URLs",
       "type": "object",
       "properties": {
-        "title": { "type": "string" },
-        "description": { "type": "string" },
-        "posterUrl": { "type": "string" },
-        "bannerUrl": { "type": "string" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "description": { "type": "string", "maxLength": 10000 },
+        "synopsis": { "type": "string", "maxLength": 10000 },
+        "posterUrl": { "type": "string", "maxLength": 2048 },
+        "poster_url": { "type": "string", "maxLength": 2048 },
+        "bannerUrl": { "type": "string", "maxLength": 2048 },
+        "banner_url": { "type": "string", "maxLength": 2048 },
         "genres": { "type": "array" },
-        "rating": { "type": "string" },
-        "type": { "type": "string" },
-        "contentType": { "type": "string" }
+        "rating": { "type": "string", "maxLength": 20 },
+        "releaseYear": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "maxLength": 50 },
+        "language": { "type": "string", "maxLength": 50 },
+        "dubbedBy": { "type": "string", "maxLength": 120 },
+        "featured": { "type": "boolean" },
+        "trending": { "type": "boolean" },
+        "views": { "type": "number" },
+        "type": { "type": "string", "enum": ["TV Series", "Movie"] },
+        "contentType": { "type": "string", "enum": ["TV Series", "Movie"] }
       },
       "required": ["title"]
     },
-    "Episode": {
-      "title": "Episode",
-      "description": "Single episode with streaming server URLs",
+    "Season": {
+      "title": "Season",
+      "description": "Season metadata and artwork for an anime series",
       "type": "object",
       "properties": {
-        "animeId": { "type": "string" },
-        "seasonId": { "type": "string" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "animeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "seasonNumber": { "type": "number" },
+        "title": { "type": "string", "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 5000 },
+        "posterUrl": { "type": "string", "maxLength": 2048 },
+        "bannerUrl": { "type": "string", "maxLength": 2048 },
+        "order": { "type": "number" },
+        "status": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["animeId", "seasonNumber"]
+    },
+    "Episode": {
+      "title": "Episode",
+      "description": "Single episode with streaming server URLs and release metadata",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "animeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "seasonId": { "type": "string", "maxLength": 128 },
+        "seasonNumber": { "type": "number" },
         "episodeNumber": { "type": "number" },
-        "title": { "type": "string" },
-        "server1Url": { "type": "string" },
-        "server2Url": { "type": "string" },
-        "server3Url": { "type": "string" }
+        "title": { "type": "string", "maxLength": 250 },
+        "description": { "type": "string", "maxLength": 5000 },
+        "thumbnailUrl": { "type": "string", "maxLength": 2048 },
+        "duration": { "type": "string", "maxLength": 50 },
+        "releaseDate": { "type": "string", "maxLength": 50 },
+        "server1Url": { "type": "string", "maxLength": 2048 },
+        "server2Url": { "type": "string", "maxLength": 2048 },
+        "server3Url": { "type": "string", "maxLength": 2048 },
+        "published": { "type": "boolean" },
+        "isEarlyAccess": { "type": "boolean" },
+        "isPremiumOnly": { "type": "boolean" },
+        "views": { "type": "number" }
       },
       "required": ["animeId", "episodeNumber"]
     },
-    "AdminNotification": {
-      "title": "AdminNotification",
-      "description": "Live real-time alerts for the owner when users register or admin operations occur",
+    "Banner": {
+      "title": "Banner",
+      "description": "Hero promotional banners linked to featured anime or announcements",
       "type": "object",
       "properties": {
-        "type": { "type": "string", "enum": ["new_user", "admin_action"] },
-        "title": { "type": "string" },
-        "details": { "type": "string" },
-        "category": { "type": "string" },
-        "userEmail": { "type": "string" },
-        "userName": { "type": "string" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "title": { "type": "string", "maxLength": 250 },
+        "subtitle": { "type": "string", "maxLength": 500 },
+        "imageUrl": { "type": "string", "maxLength": 2048 },
+        "animeId": { "type": "string", "maxLength": 128 },
+        "linkUrl": { "type": "string", "maxLength": 2048 },
+        "order": { "type": "number" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["title", "imageUrl"]
+    },
+    "Favorite": {
+      "title": "Favorite",
+      "description": "User-favorited anime item",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "animeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "animeTitle": { "type": "string", "maxLength": 300 },
+        "posterUrl": { "type": "string", "maxLength": 2048 },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["userId", "animeId"]
+    },
+    "WatchHistory": {
+      "title": "WatchHistory",
+      "description": "User episode playback position and watch history entry",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "animeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "animeTitle": { "type": "string", "maxLength": 300 },
+        "episodeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "episodeTitle": { "type": "string", "maxLength": 250 },
+        "seasonId": { "type": "string", "maxLength": 128 },
+        "seasonNumber": { "type": "number" },
+        "episodeNumber": { "type": "number" },
+        "posterUrl": { "type": "string", "maxLength": 2048 },
+        "currentTime": { "type": "number" },
+        "duration": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["userId", "animeId", "episodeId"]
+    },
+    "Watchlist": {
+      "title": "Watchlist",
+      "description": "User planned watchlist entry",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "animeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "animeTitle": { "type": "string", "maxLength": 300 },
+        "posterUrl": { "type": "string", "maxLength": 2048 },
+        "status": { "type": "string", "maxLength": 50 },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["userId", "animeId"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "User comment on an anime or episode",
+      "type": "object",
+      "properties": {
+        "animeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "episodeId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "userName": { "type": "string", "maxLength": 120 },
+        "userPhoto": { "type": "string", "maxLength": 2048 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["animeId", "userId", "text", "createdAt"]
+    },
+    "Rating": {
+      "title": "Rating",
+      "description": "User star rating (1-10) for an anime title",
+      "type": "object",
+      "properties": {
+        "animeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "score": { "type": "number" },
+        "review": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["animeId", "userId", "score"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User and global platform notifications for episode releases and maintenance",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 200 },
+        "message": { "type": "string", "maxLength": 1000 },
+        "type": { "type": "string", "enum": ["episode", "anime", "announcement", "system"] },
+        "link": { "type": "string", "maxLength": 500 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "isPublic": { "type": "boolean" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["title", "message", "type", "createdAt"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "Public website branding, theme, social links, and maintenance config",
+      "type": "object",
+      "properties": {
+        "websiteName": { "type": "string", "maxLength": 120 },
+        "tagline": { "type": "string", "maxLength": 250 },
+        "logoUrl": { "type": "string", "maxLength": 2048 },
+        "telegramLink": { "type": "string", "maxLength": 500 },
+        "discordLink": { "type": "string", "maxLength": 500 },
+        "youtubeLink": { "type": "string", "maxLength": 500 },
+        "facebookLink": { "type": "string", "maxLength": 500 },
+        "theme": { "type": "string", "maxLength": 50 },
+        "maintenanceMode": { "type": "boolean" },
+        "maintenanceMessage": { "type": "string", "maxLength": 1000 },
+        "sessionTimeoutMinutes": { "type": "number" }
+      },
+      "required": ["websiteName"]
+    },
+    "AnalyticsSummary": {
+      "title": "AnalyticsSummary",
+      "description": "Aggregated analytics snapshots readable and writable exclusively by verified owner",
+      "type": "object",
+      "properties": {
+        "dateKey": { "type": "string", "maxLength": 40 },
+        "totalViews": { "type": "number" },
+        "totalPlays": { "type": "number" },
+        "uniqueVisitors": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["dateKey", "updatedAt"]
+    },
+    "AdminLog": {
+      "title": "AdminLog",
+      "description": "Immutable admin audit log entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "action": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "maxLength": 50 },
+        "details": { "type": "string", "maxLength": 2000 },
+        "user": { "type": "string", "maxLength": 150 },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["action", "category", "timestamp"]
+    },
+    "PremiumPlan": {
+      "title": "PremiumPlan",
+      "description": "Subscription tier definition for VIP/Pro features",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 120 },
+        "tier": { "type": "string", "enum": ["free", "pro", "vip"] },
+        "price": { "type": "number" },
+        "currency": { "type": "string", "maxLength": 10 },
+        "durationDays": { "type": "number" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["name", "tier", "price"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "User payment and premium membership transaction record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "planId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string", "maxLength": 10 },
+        "status": { "type": "string", "enum": ["pending", "completed", "failed", "refunded"] },
+        "provider": { "type": "string", "maxLength": 50 },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["userId", "planId", "amount", "status", "createdAt"]
+    },
+    "AdminNotification": {
+      "title": "AdminNotification",
+      "description": "Live real-time alerts for the owner when users register, episodes release, or system events occur",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 200 },
+        "details": { "type": "string", "maxLength": 1000 },
+        "category": { "type": "string", "maxLength": 64 },
+        "userEmail": { "type": "string", "maxLength": 150 },
+        "userName": { "type": "string", "maxLength": 120 },
         "timestamp": { "type": "number" },
         "read": { "type": "boolean" }
       },
       "required": ["type", "title", "timestamp"]
+    },
+    "LiveVisitor": {
+      "title": "LiveVisitor",
+      "description": "Real-time presence and currently streaming activity of online guests and users",
+      "type": "object",
+      "properties": {
+        "visitorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "userId": { "type": "string", "maxLength": 128 },
+        "userName": { "type": "string", "maxLength": 120 },
+        "userEmail": { "type": "string", "maxLength": 150 },
+        "isLoggedIn": { "type": "boolean" },
+        "device": { "type": "string", "maxLength": 40 },
+        "browser": { "type": "string", "maxLength": 60 },
+        "os": { "type": "string", "maxLength": 60 },
+        "country": { "type": "string", "maxLength": 80 },
+        "currentPage": { "type": "string", "maxLength": 300 },
+        "currentTitle": { "type": "string", "maxLength": 300 },
+        "currentAnimeTitle": { "type": "string", "maxLength": 300 },
+        "currentEpisode": { "type": "number" },
+        "isPlaying": { "type": "boolean" },
+        "lastActivityAt": { "type": "number" },
+        "startedAt": { "type": "number" }
+      },
+      "required": ["visitorId", "lastActivityAt"]
+    },
+    "AnalyticsEvent": {
+      "title": "AnalyticsEvent",
+      "description": "Telemetry event stream for visits, plays, durations, and searches",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "maxLength": 50 },
+        "path": { "type": "string", "maxLength": 300 },
+        "animeId": { "type": "string", "maxLength": 128 },
+        "episodeId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "visitorId": { "type": "string", "maxLength": 128 },
+        "device": { "type": "string", "maxLength": 40 },
+        "browser": { "type": "string", "maxLength": 60 },
+        "country": { "type": "string", "maxLength": 80 },
+        "referrer": { "type": "string", "maxLength": 300 },
+        "duration": { "type": "number" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["type", "timestamp"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
-      "description": "User profiles indexed by UID"
+      "description": "Private user profiles isolated by UID or verified owner"
     },
     "/anime/{animeId}": {
       "schema": "Anime",
-      "description": "Anime series and movies collection"
+      "description": "Publicly readable anime catalog writable only by verified owner"
+    },
+    "/seasons/{seasonId}": {
+      "schema": "Season",
+      "description": "Publicly readable anime seasons writable only by verified owner"
     },
     "/episodes/{episodeId}": {
       "schema": "Episode",
-      "description": "Anime episodes collection"
+      "description": "Episodes collection; published episodes readable publicly, drafts and writes restricted to verified owner"
+    },
+    "/banners/{bannerId}": {
+      "schema": "Banner",
+      "description": "Promotional homepage banners writable only by verified owner"
+    },
+    "/favorites/{favoriteId}": {
+      "schema": "Favorite",
+      "description": "Per-user favorite anime entries"
+    },
+    "/watchHistory/{historyId}": {
+      "schema": "WatchHistory",
+      "description": "Per-user watch progress and history records"
+    },
+    "/watchlist/{watchlistId}": {
+      "schema": "Watchlist",
+      "description": "Per-user planned anime watchlist entries"
+    },
+    "/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Authenticated user comments linked to valid anime"
+    },
+    "/ratings/{ratingId}": {
+      "schema": "Rating",
+      "description": "Authenticated user star ratings (1-10) linked to valid anime"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "Public release/maintenance notifications and user-scoped notifications"
+    },
+    "/settings/{settingId}": {
+      "schema": "Setting",
+      "description": "Public site configuration writable only by verified owner"
+    },
+    "/analytics/{analyticsId}": {
+      "schema": "AnalyticsSummary",
+      "description": "Aggregated analytics snapshots restricted to verified owner"
+    },
+    "/adminLogs/{logId}": {
+      "schema": "AdminLog",
+      "description": "Admin security and mutation audit logs restricted to verified owner"
+    },
+    "/premiumPlans/{planId}": {
+      "schema": "PremiumPlan",
+      "description": "Publicly readable premium plans writable only by verified owner"
+    },
+    "/payments/{paymentId}": {
+      "schema": "Payment",
+      "description": "Private payment records scoped by userId and verified owner"
     },
     "/admin_notifications/{notificationId}": {
       "schema": "AdminNotification",
       "description": "Real-time owner notifications collection"
+    },
+    "/live_visitors/{visitorId}": {
+      "schema": "LiveVisitor",
+      "description": "Live active online users and guests presence"
+    },
+    "/analytics_events/{eventId}": {
+      "schema": "AnalyticsEvent",
+      "description": "Detailed telemetry events log"
     }
   }
 }

@@ -10,7 +10,7 @@ function ContinueWatchingRow() {
   const [history, setHistory] = useState<any[]>([]);
   const effectiveUserId = user?.uid || firebaseUser?.uid || null;
 
-  // Requirement 8: Continue Watching must use only the logged-in user's watch history from Supabase
+  // Continue Watching uses only the logged-in user's watch history from Cloud Firestore
   useEffect(() => {
     let isMounted = true;
 

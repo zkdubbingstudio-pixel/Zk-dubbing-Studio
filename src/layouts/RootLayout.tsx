@@ -11,6 +11,7 @@ import AboutModal from '../components/AboutModal';
 import AuthModal from '../components/AuthModal';
 import OwnerToastContainer from '../components/OwnerToastContainer';
 import { subscribeToOwnerNotifications } from '../lib/ownerNotificationService';
+import { startTelemetryPresence, trackPageVisit } from '../lib/telemetryService';
 
 export default function RootLayout() {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -20,10 +21,17 @@ export default function RootLayout() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Scroll to top on route change
+  // Mount real-time presence heartbeat
+  useEffect(() => {
+    const cleanup = startTelemetryPresence(user);
+    return cleanup;
+  }, [user]);
+
+  // Track page visit on route change
   useEffect(() => {
     window.scrollTo(0, 0);
-  }, [location.pathname]);
+    trackPageVisit(location.pathname, document.title, user);
+  }, [location.pathname, user]);
 
   // Auto-dismiss auth success message
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Play, SkipForward, SkipBack, Server, RotateCcw, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Play, SkipForward, SkipBack, Server, RotateCcw, AlertCircle, Lock, Crown } from 'lucide-react';
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   getEpisodeById, 
@@ -10,15 +10,14 @@ import {
   resolveEpisodeServers, 
   isValidStreamUrl,
   probeServerReachable,
-  saveUserProgress, 
-  getActiveEpisodesTable, 
-  getActiveAnimeTable 
+  saveUserProgress
 } from '../lib/dataService';
-import { supabase } from '../lib/supabase';
 import { getCachedData } from '../lib/cache';
 import { useAuthStore } from '../store/authStore';
 import SmartImage from '../components/SmartImage';
 import { resolveEpisodeImage } from '../lib/imageUtils';
+import { checkEpisodeAccess, getSecuredStreamUrl } from '../lib/security';
+import { trackPlayStart, trackWatchProgress } from '../lib/telemetryService';
 
 function isDirectVideo(url: string): boolean {
   if (!url) return false;
@@ -96,15 +95,21 @@ export default function WatchPage() {
     
     const trackView = async () => {
       try {
-        const epViews = ((episode.views || 0) + 1);
-        const epTable = await getActiveEpisodesTable();
-        await supabase.from(epTable).update({ views: epViews }).eq('id', epId);
         const anId = episode.animeId || episode.anime_id;
-        if (anId) {
-          const anViews = ((anime?.views || 0) + 1);
-          const anTable = await getActiveAnimeTable();
-          await supabase.from(anTable).update({ views: anViews }).eq('id', anId);
-        }
+        fetch('/api/stream/view', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ episodeId: epId, animeId: anId || '' }),
+        }).catch(() => {});
+
+        // Real-time telemetry play event & live presence tracking
+        trackPlayStart({
+          animeId: anId || '',
+          animeTitle: anime?.title || 'Anime',
+          episodeId: epId,
+          episodeNumber: episode.episodeNumber || 1,
+          user,
+        }).catch(() => {});
       } catch (err) {
         // Safe to ignore if offline
       }
@@ -141,7 +146,7 @@ export default function WatchPage() {
     }
   }, [paramId, seasonEpisodes, episode?.id]);
 
-  // Load episode details & anime metadata (Searches Firestore + Supabase)
+  // Load episode details & anime metadata (Searches Cloud Firestore)
   useEffect(() => {
     let isMounted = true;
     if (!episode) {
@@ -273,7 +278,7 @@ export default function WatchPage() {
           if (list.length > 20) list.pop();
           localStorage.setItem('zk_watch_history', JSON.stringify(list));
 
-          // Sync to Supabase user_progress table for authenticated users
+          // Sync to Cloud Firestore watchHistory collection for authenticated users
           if (user?.uid) {
             saveUserProgress({
               userId: user.uid,
@@ -397,12 +402,15 @@ export default function WatchPage() {
     } catch {}
   }, [episode?.id, activeEpId, aliveServers]);
 
+  const accessCheck = useMemo(() => checkEpisodeAccess(episode, user), [episode, user]);
+
   const activeStreamUrl = useMemo(() => {
-    if (!effectiveServer) return '';
-    return effectiveServer === 'server1' ? server1Url :
-           effectiveServer === 'server2' ? server2Url :
-           effectiveServer === 'server3' ? server3Url : '';
-  }, [effectiveServer, server1Url, server2Url, server3Url]);
+    if (!effectiveServer || !accessCheck.allowed) return '';
+    const raw = effectiveServer === 'server1' ? server1Url :
+                effectiveServer === 'server2' ? server2Url :
+                effectiveServer === 'server3' ? server3Url : '';
+    return getSecuredStreamUrl(raw);
+  }, [effectiveServer, accessCheck.allowed, server1Url, server2Url, server3Url]);
 
   // Immediate failover when a server fails
   const handleServerFailure = useCallback((failedServer: 'server1' | 'server2' | 'server3', reason?: string) => {
@@ -592,9 +600,35 @@ export default function WatchPage() {
              </div>
 
              {/* Player Container (Server 1 Abyss / Server 2 FileMoon / Server 3 VDOHide / Direct Video Player) */}
-             <div className="w-full aspect-video relative rounded-2xl overflow-hidden border border-brand shadow-[0_0_20px_rgba(0,229,255,0.3)] bg-black">
-                {/* Requirement 3: If the server is unavailable, show only: "Server unavailable. Please try another server." */}
-                {(!activeStreamUrl || aliveServers.length === 0) ? (
+             <div 
+               onContextMenu={(e) => e.preventDefault()}
+               className="w-full aspect-video relative rounded-2xl overflow-hidden border border-brand shadow-[0_0_20px_rgba(0,229,255,0.3)] bg-black"
+             >
+                {!accessCheck.allowed ? (
+                  /* Premium / Early Access Gate Overlay (Requirement 17 & 18) */
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-b from-[#080b12] to-[#04060a] p-6 text-center z-20 relative">
+                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-amber-500/20 to-brand/20 border border-amber-500/40 flex items-center justify-center text-amber-400 mb-4 shadow-[0_0_30px_rgba(245,158,11,0.3)]">
+                      <Crown className="w-8 h-8" />
+                    </div>
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-bold uppercase tracking-wider mb-2">
+                      <Lock className="w-3.5 h-3.5" />
+                      {accessCheck.reason === 'early_access' ? 'Early Access' : 'Premium Only'}
+                    </div>
+                    <h2 className="text-xl sm:text-2xl font-black text-white mb-2">
+                      {accessCheck.reason === 'early_access' ? 'VIP Early Access' : 'ZK Premium Content'}
+                    </h2>
+                    <p className="text-white/70 text-xs sm:text-sm max-w-md mb-6 leading-relaxed">
+                      {accessCheck.message}
+                    </p>
+                    <Link
+                      to="/profile"
+                      className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-brand text-black font-extrabold text-xs sm:text-sm shadow-[0_0_20px_rgba(245,158,11,0.4)] hover:brightness-110 transition-all cursor-pointer flex items-center gap-2"
+                    >
+                      <Crown className="w-4 h-4" />
+                      Upgrade or Sign In to Watch
+                    </Link>
+                  </div>
+                ) : (!activeStreamUrl || aliveServers.length === 0) ? (
                     <div className="w-full h-full flex flex-col items-center justify-center bg-black/95 p-6 text-center">
                         <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 mb-4 shadow-[0_0_25px_rgba(239,68,68,0.25)]">
                           <AlertCircle className="w-8 h-8" />

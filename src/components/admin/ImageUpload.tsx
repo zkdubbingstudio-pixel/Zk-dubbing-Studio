@@ -1,8 +1,10 @@
-import React from "react";
-import { useState, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import imageCompression from 'browser-image-compression';
 import { UploadCloud, X, Loader2, Link as LinkIcon, Image as ImageIcon } from 'lucide-react';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from '../../lib/firebase';
 import { resolveImageUrl } from '../../lib/imageUtils';
+import { validateImageUpload, sanitizeUrl } from '../../lib/security';
 
 interface ImageUploadProps {
   label: string;
@@ -12,9 +14,21 @@ interface ImageUploadProps {
   className?: string;
 }
 
-import { validateImageUpload, sanitizeUrl } from '../../lib/security';
+function normalizeStorageFolder(folder: string): 'posters' | 'banners' | 'episode-thumbnails' | 'avatars' {
+  const lower = (folder || '').toLowerCase();
+  if (lower.includes('banner')) return 'banners';
+  if (lower.includes('episode') || lower.includes('thumb')) return 'episode-thumbnails';
+  if (lower.includes('avatar')) return 'avatars';
+  return 'posters';
+}
 
-export default function ImageUpload({ label, value, onChange, folder, className = "h-40" }: ImageUploadProps) {
+export default function ImageUpload({
+  label,
+  value,
+  onChange,
+  folder,
+  className = 'h-40',
+}: ImageUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -53,28 +67,40 @@ export default function ImageUpload({ label, value, onChange, folder, className 
       return;
     }
 
+    if (!storage) {
+      setErrorMsg('Firebase Storage is not initialized.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     setUploading(true);
 
     try {
       const options = {
-        maxSizeMB: 0.8,
+        maxSizeMB: 0.5,
         maxWidthOrHeight: 1600,
         useWebWorker: true,
+        fileType: 'image/webp',
       };
       const compressedFile = await imageCompression(file, options);
-      
-      const reader = new FileReader();
-      reader.readAsDataURL(compressedFile);
-      reader.onloadend = () => {
-        const base64data = reader.result as string;
-        onChange(base64data);
-        setUploading(false);
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      };
-      
+      const storageFolder = normalizeStorageFolder(folder);
+      const randomSuffix = Math.random().toString(36).substring(2, 8);
+      const ext = compressedFile.type === 'image/webp' ? 'webp' : (file.name.split('.').pop() || 'webp').toLowerCase();
+      const objectPath = `${storageFolder}/${Date.now()}_${randomSuffix}.${ext}`;
+      const storageRef = ref(storage, objectPath);
+
+      await uploadBytes(storageRef, compressedFile, {
+        contentType: compressedFile.type || 'image/webp',
+        cacheControl: 'public, max-age=31536000',
+      });
+
+      const downloadUrl = await getDownloadURL(storageRef);
+      onChange(downloadUrl);
     } catch (error: any) {
-      setErrorMsg(error?.message || 'Error processing image. Please try a different image.');
+      setErrorMsg(error?.message || 'Error uploading image to Firebase Storage. Please try again.');
+    } finally {
       setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -94,10 +120,18 @@ export default function ImageUpload({ label, value, onChange, folder, className 
           onClick={() => setMode(mode === 'upload' ? 'url' : 'upload')}
           className="text-xs text-brand flex items-center gap-1 hover:underline"
         >
-          {mode === 'upload' ? <><LinkIcon className="w-3 h-3" /> Use URL</> : <><ImageIcon className="w-3 h-3" /> Upload File</>}
+          {mode === 'upload' ? (
+            <>
+              <LinkIcon className="w-3 h-3" /> Use URL
+            </>
+          ) : (
+            <>
+              <ImageIcon className="w-3 h-3" /> Upload File
+            </>
+          )}
         </button>
       </div>
-      
+
       {errorMsg && (
         <div className="mb-2 p-2 bg-red-500/20 border border-red-500/30 rounded-lg text-xs text-red-400">
           {errorMsg}
@@ -105,15 +139,15 @@ export default function ImageUpload({ label, value, onChange, folder, className 
       )}
 
       {mode === 'url' ? (
-        <input 
-          type="url" 
-          value={value} 
-          onChange={e => onChange(sanitizeUrl(e.target.value))} 
+        <input
+          type="url"
+          value={value}
+          onChange={(e) => onChange(sanitizeUrl(e.target.value))}
           placeholder="https://example.com/image.jpg"
           className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand"
         />
       ) : (
-        <div 
+        <div
           onClick={() => !uploading && !value && fileInputRef.current?.click()}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -122,27 +156,32 @@ export default function ImageUpload({ label, value, onChange, folder, className 
             isDragging ? 'border-brand bg-brand/5' : 'border-white/20 bg-black/50 hover:border-white/40'
           } ${value ? 'border-transparent' : ''}`}
         >
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleFileSelect} 
-            accept="image/jpeg,image/png,image/webp" 
-            className="hidden" 
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            accept="image/jpeg,image/png,image/webp"
+            className="hidden"
           />
 
           {uploading ? (
             <div className="flex flex-col items-center p-4">
               <Loader2 className="w-8 h-8 text-brand animate-spin mb-2" />
-              <p className="text-sm text-white font-medium">Processing...</p>
+              <p className="text-sm text-white font-medium">Uploading to Firebase Storage...</p>
             </div>
           ) : value ? (
             <div className="relative w-full h-full group" onClick={() => fileInputRef.current?.click()}>
-              <img src={resolveImageUrl(value)} alt="Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              <img
+                src={resolveImageUrl(value)}
+                alt="Preview"
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
               <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center">
                 <UploadCloud className="w-6 h-6 text-white mb-2" />
                 <p className="text-white text-sm font-medium">Click to replace</p>
               </div>
-              <button 
+              <button
                 onClick={handleDelete}
                 className="absolute top-2 right-2 p-1.5 bg-red-500/80 hover:bg-red-500 text-white rounded-lg transition-colors z-10"
                 title="Remove Image"

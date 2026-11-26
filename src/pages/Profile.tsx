@@ -66,7 +66,7 @@ export default function Profile() {
     return 'October 2024';
   }, [user]);
 
-  // Load real data for all 4 profile sections (from Supabase / Firestore + local storage fallback)
+  // Load real data for all 4 profile sections (from Cloud Firestore + local storage fallback)
   useEffect(() => {
     let isMounted = true;
 

@@ -5,19 +5,20 @@ import {
   Database, FileCode, Server, Shield
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
-import { getAdminActivityLogs, clearAdminActivityLogs, ActivityLogItem } from '../../lib/activityLogger';
+import { getAdminActivityLogs, fetchAdminActivityLogs, clearAdminActivityLogs, ActivityLogItem } from '../../lib/activityLogger';
 import { getAdminSettings, saveAdminSettings } from '../../lib/adminSettingsStore';
 import { OWNER_EMAIL } from '../../lib/security';
 
 export default function AdminSecurity() {
   const { user } = useAuthStore();
-  const [logs, setLogs] = useState<ActivityLogItem[]>([]);
+  const [logs, setLogs] = useState<ActivityLogItem[]>(() => getAdminActivityLogs());
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [settings, setSettings] = useState(getAdminSettings());
   const [timeoutMsg, setTimeoutMsg] = useState(false);
 
-  const loadLogs = () => {
-    setLogs(getAdminActivityLogs());
+  const loadLogs = async () => {
+    const fetched = await fetchAdminActivityLogs();
+    setLogs(fetched);
   };
 
   useEffect(() => {
@@ -31,8 +32,8 @@ export default function AdminSecurity() {
     setTimeout(() => setTimeoutMsg(false), 2500);
   };
 
-  const handleClearLogs = () => {
-    clearAdminActivityLogs();
+  const handleClearLogs = async () => {
+    await clearAdminActivityLogs();
     setLogs([]);
   };
 
@@ -51,7 +52,7 @@ export default function AdminSecurity() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-white tracking-tight">Security &amp; Audit Logs</h1>
-            <p className="text-xs text-white/50">Comprehensive security compliance, Row Level Security, and audit trails</p>
+            <p className="text-xs text-white/50">Comprehensive security compliance, Firestore Security Rules, and audit trails</p>
           </div>
         </div>
 
@@ -148,22 +149,22 @@ export default function AdminSecurity() {
               <Shield className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-white">Security Architecture &amp; RLS Status</h2>
-              <p className="text-xs text-white/50">Row Level Security on all tables, owner-only mutation protection, and zero exposed keys</p>
+              <h2 className="text-base font-bold text-white">Security Architecture &amp; Firebase Rules Status</h2>
+              <p className="text-xs text-white/50">Firestore &amp; Storage Security Rules on all collections, owner-only mutation protection, and App Check</p>
             </div>
           </div>
           <span className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold w-fit">
-            RLS Active &amp; Enforced
+            Security Rules Active &amp; Enforced
           </span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-1.5">
-            <span className="text-[10px] uppercase font-bold text-white/40 tracking-wider">Row Level Security</span>
+            <span className="text-[10px] uppercase font-bold text-white/40 tracking-wider">Firestore &amp; Storage Rules</span>
             <p className="text-sm font-bold text-white flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Every Table Protected
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Every Collection Protected
             </p>
-            <p className="text-[11px] text-white/50">anime, seasons, episodes, users, user_progress, favorites, watchlist</p>
+            <p className="text-[11px] text-white/50">anime, seasons, episodes, users, watchHistory, favorites, comments, ratings, notifications</p>
           </div>
 
           <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-1.5">

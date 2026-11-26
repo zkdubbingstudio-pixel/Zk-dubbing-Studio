@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { Link, useNavigate } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
-import { isAuthorizedAdmin, signOutUser } from '../lib/authService';
+import { doc, updateDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import { sanitizeString, sanitizeUrl } from '../lib/security';
+import { clearUserWatchHistory } from '../lib/dataService';
+import { isAuthorizedAdmin, signOutUser, invalidateUserProfileCache } from '../lib/authService';
 import {
   User,
   Settings as SettingsIcon,
@@ -67,30 +70,37 @@ export default function Settings() {
     setSaveSuccess(false);
     try {
       if (user) {
+        const cleanName = sanitizeString(displayName, 120);
+        const cleanPhoto = sanitizeUrl(photoURL);
         const updatedUser = {
           ...user,
-          displayName,
-          name: displayName,
-          photoURL,
-          profilePhoto: photoURL,
+          displayName: cleanName,
+          name: cleanName,
+          full_name: cleanName,
+          photoURL: cleanPhoto,
+          profilePhoto: cleanPhoto,
           settings
         };
-        
-        // Sync to Supabase users table
-        try {
-          await supabase.from('users').update({
-            full_name: displayName,
-            username: displayName,
-            displayName,
-            photo_url: photoURL,
-            photoURL,
-            settings,
-          }).eq('id', user.uid);
-        } catch {}
-        
+
+        // Sync directly to Cloud Firestore users/{uid} (allowed mutable keys only)
+        if (db && user.uid) {
+          try {
+            await updateDoc(doc(db, 'users', user.uid), {
+              name: cleanName,
+              displayName: cleanName,
+              full_name: cleanName,
+              photoURL: cleanPhoto,
+              profilePhoto: cleanPhoto,
+              settings,
+              updatedAt: new Date().toISOString(),
+            });
+            invalidateUserProfileCache(user.uid);
+          } catch {}
+        }
+
         setUser(updatedUser);
       }
-      
+
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (error) {
@@ -109,9 +119,7 @@ export default function Settings() {
     try {
       localStorage.removeItem('zk_watch_history');
       if (user?.uid) {
-        try {
-          await supabase.from('user_progress').delete().eq('user_id', user.uid);
-        } catch {}
+        await clearUserWatchHistory(user.uid);
       }
       setActionNotice('Watch History has been successfully cleared.');
       setTimeout(() => setActionNotice(null), 4000);
@@ -125,9 +133,7 @@ export default function Settings() {
     try {
       localStorage.removeItem('zk_watch_history');
       if (user?.uid) {
-        try {
-          await supabase.from('user_progress').delete().eq('user_id', user.uid);
-        } catch {}
+        await clearUserWatchHistory(user.uid);
       }
       setActionNotice('Continue Watching progress has been successfully cleared.');
       setTimeout(() => setActionNotice(null), 4000);

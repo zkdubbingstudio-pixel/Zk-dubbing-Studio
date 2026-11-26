@@ -1,21 +1,19 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search as SearchIcon, Filter, Sparkles, Film, Loader2 } from 'lucide-react';
-import { supabase, executeSupabaseWithRetry } from '../lib/supabase';
-import { normalizeAnime, getGenres, getActiveAnimeTable, getLocalAnimeList } from '../lib/dataService';
+import { getAllAnime, getGenres, getLocalAnimeList } from '../lib/dataService';
 import { getCachedData, setCachedData } from '../lib/cache';
 import AnimeCard3D from '../components/AnimeCard3D';
 import GenreChipsBar from '../components/GenreChipsBar';
 
 const PAGE_SIZE = 24;
-const SEARCH_FIELDS = 'id, title, poster_url, banner_url, rating, views, type, release_year, genres, created_at';
 
 export default function Search() {
   const [searchParams] = useSearchParams();
   const [query, setQuery] = useState('');
   const [selectedGenre, setSelectedGenre] = useState<string>('All');
   const [genresList, setGenresList] = useState<string[]>(['All']);
-  
+
   // Instant initial population from warm catalog cache for 0ms load
   const cachedCatalog = getCachedData<any>('unified_app_catalog');
   const initialResults = cachedCatalog?.allAnime?.slice(0, PAGE_SIZE) || [];
@@ -34,85 +32,71 @@ export default function Search() {
     }
   }, [searchParams]);
 
-  // Load dynamic genres from Supabase
+  // Load dynamic genres from Cloud Firestore
   useEffect(() => {
     let isMounted = true;
-    getGenres().then((list) => {
-      if (isMounted && Array.isArray(list) && list.length > 0) {
-        setGenresList(list);
-      }
-    }).catch(() => {});
+    getGenres()
+      .then((list) => {
+        if (isMounted && Array.isArray(list) && list.length > 0) {
+          setGenresList(list);
+        }
+      })
+      .catch(() => {});
 
     return () => {
       isMounted = false;
     };
   }, []);
 
-  // Search directly in Supabase with field projection and pagination (Requirement 3: Fetch only required fields & pagination)
-  const fetchPage = useCallback(async (pageIndex: number, isInitial = false) => {
-    if (isInitial) {
-      setLoading(true);
-    } else {
-      setLoadingMore(true);
-    }
-
-    try {
-      const cleanQuery = query.trim().toLowerCase();
-      const activeTable = await getActiveAnimeTable();
-      const from = pageIndex * PAGE_SIZE;
-      const to = from + PAGE_SIZE - 1;
-
-      const res = await executeSupabaseWithRetry(async () => {
-        let q = supabase.from(activeTable).select(SEARCH_FIELDS);
-
-        if (query.trim()) {
-          q = q.ilike('title', `%${query.trim()}%`);
-        }
-
-        if (selectedGenre !== 'All') {
-          q = q.contains('genres', [selectedGenre]);
-        }
-
-        return await q.order('created_at', { ascending: false }).range(from, to);
-      });
-
-      const fetchedData = res?.data || [];
-      const remote = fetchedData.map((item: any) => {
-        const norm = normalizeAnime(item, item.id);
-        // Pre-warm individual item cache for 0ms navigation
-        setCachedData(`anime_${norm.id}`, norm);
-        return norm;
-      });
-
+  // Search directly in Cloud Firestore with 5-min caching and client pagination
+  const fetchPage = useCallback(
+    async (pageIndex: number, isInitial = false) => {
       if (isInitial) {
-        // Also merge any local items for resilience
-        const localList = getLocalAnimeList().filter(a => {
-          const matchTitle = !cleanQuery || a.title.toLowerCase().includes(cleanQuery);
-          const matchGenre = selectedGenre === 'All' || (Array.isArray(a.genres) && a.genres.some((g: string) => g.toLowerCase() === selectedGenre.toLowerCase()));
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+
+      try {
+        const cleanQuery = query.trim().toLowerCase();
+        const allItems = await getAllAnime();
+
+        const filtered = allItems.filter((a) => {
+          const matchTitle =
+            !cleanQuery ||
+            (a.title || '').toLowerCase().includes(cleanQuery) ||
+            (a.studio || '').toLowerCase().includes(cleanQuery) ||
+            (a.dubbedBy || '').toLowerCase().includes(cleanQuery);
+          const matchGenre =
+            selectedGenre === 'All' ||
+            (Array.isArray(a.genres) &&
+              a.genres.some((g: string) => g.toLowerCase() === selectedGenre.toLowerCase()));
           return matchTitle && matchGenre;
         });
 
-        const remoteIds = new Set(remote.map(r => r.id));
-        const unSynced = localList.filter(l => !remoteIds.has(l.id));
-        const combined = [...unSynced, ...remote];
-        setResults(combined);
-        setHasMore(fetchedData.length === PAGE_SIZE);
-      } else {
-        setResults(prev => [...prev, ...remote]);
-        setHasMore(fetchedData.length === PAGE_SIZE);
+        const from = pageIndex * PAGE_SIZE;
+        const pageSlice = filtered.slice(from, from + PAGE_SIZE);
+        pageSlice.forEach((norm) => setCachedData(`anime_${norm.id}`, norm));
+
+        if (isInitial) {
+          setResults(pageSlice);
+        } else {
+          setResults((prev) => [...prev, ...pageSlice]);
+        }
+        setHasMore(from + PAGE_SIZE < filtered.length);
+      } catch {
+        if (isInitial) {
+          const localList = getLocalAnimeList();
+          setResults(localList.slice(0, PAGE_SIZE));
+          setHasMore(false);
+        }
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
       }
-    } catch {
-      // Graceful fallback to cached/local
-      if (isInitial) {
-        const localList = getLocalAnimeList();
-        setResults(localList.slice(0, PAGE_SIZE));
-        setHasMore(false);
-      }
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  }, [query, selectedGenre]);
+    },
+    [query, selectedGenre]
+  );
 
   useEffect(() => {
     setPage(0);

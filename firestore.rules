@@ -1,70 +1,721 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-    function isSuperAdmin() {
-      return isAuthenticated() && request.auth.token.email == 'zkdubbingstudio@gmail.com';
+
+    // -------------------------------------------------------------------------
+    // 1. Global Safety Net: Default-Deny Catch-All
+    // -------------------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
     }
 
-    match /users/{userId} {
-      allow read: if isAuthenticated() || isSuperAdmin();
-      allow write: if (isAuthenticated() && request.auth.uid == userId) || isSuperAdmin();
+    // -------------------------------------------------------------------------
+    // 2. Hardened Primitive Helpers
+    // -------------------------------------------------------------------------
+    function incoming() {
+      return request.resource.data;
     }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$');
+    }
+
+    // Strictly verified studio owner check (no unverified email spoofing, no list() lookups)
+    function isOwner() {
+      return isSignedIn()
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() == 'zkdubbingstudio@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function isOptString(val, maxLen) {
+      return val == null || (val is string && val.size() <= maxLen);
+    }
+
+    function isOptNumber(val) {
+      return val == null || val is int || val is float;
+    }
+
+    function isOptBool(val) {
+      return val == null || val is bool;
+    }
+
+    function isOptTimestamp(val) {
+      return val == null || val is int || val is float || val is string || val is timestamp;
+    }
+
+    function isValidStringList(listVal, maxItems) {
+      return listVal is list
+        && listVal.size() <= maxItems
+        && (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() <= 80));
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Entity Validation Blueprints (Anti-Update-Gap & Payload Boundaries)
+    // -------------------------------------------------------------------------
+    function isValidUser(data, userId) {
+      return data.keys().hasAll(['uid', 'email'])
+        && data.keys().hasOnly([
+          'uid', 'id', 'email', 'name', 'displayName', 'full_name', 'username',
+          'photoURL', 'profilePhoto', 'photo_url', 'avatarUrl',
+          'role', 'isBanned', 'is_banned', 'isPremium', 'is_premium', 'premiumTier', 'premium_tier',
+          'createdAt', 'created_at', 'lastLogin', 'last_login', 'lastLoginAt', 'updatedAt', 'updated_at',
+          'settings'
+        ])
+        && data.uid is string && data.uid == userId
+        && isOptString(data.get('id', null), 128)
+        && data.email is string && data.email.size() <= 150
+        && isOptString(data.get('name', null), 120)
+        && isOptString(data.get('displayName', null), 120)
+        && isOptString(data.get('full_name', null), 120)
+        && isOptString(data.get('username', null), 120)
+        && isOptString(data.get('photoURL', null), 2048)
+        && isOptString(data.get('profilePhoto', null), 2048)
+        && isOptString(data.get('photo_url', null), 2048)
+        && isOptString(data.get('avatarUrl', null), 2048)
+        && (!('role' in data) || data.role in ['user', 'owner', 'admin'])
+        && isOptBool(data.get('isBanned', null))
+        && isOptBool(data.get('is_banned', null))
+        && isOptBool(data.get('isPremium', null))
+        && isOptBool(data.get('is_premium', null))
+        && (!('premiumTier' in data) || data.premiumTier == null || data.premiumTier in ['free', 'pro', 'vip'])
+        && (!('premium_tier' in data) || data.premium_tier == null || data.premium_tier in ['free', 'pro', 'vip'])
+        && isOptTimestamp(data.get('createdAt', null))
+        && isOptTimestamp(data.get('created_at', null))
+        && isOptTimestamp(data.get('lastLogin', null))
+        && isOptTimestamp(data.get('last_login', null))
+        && isOptTimestamp(data.get('lastLoginAt', null))
+        && isOptTimestamp(data.get('updatedAt', null))
+        && isOptTimestamp(data.get('updated_at', null))
+        && (!('settings' in data) || data.settings == null || data.settings is map);
+    }
+
+    function isValidAnime(data) {
+      return data.keys().hasAll(['title'])
+        && data.keys().hasOnly([
+          'id', 'title', 'description', 'synopsis',
+          'posterUrl', 'poster_url', 'bannerUrl', 'banner_url',
+          'genres', 'rating', 'releaseYear', 'release_year', 'releaseDate', 'release_date',
+          'status', 'language', 'studio', 'dubbedBy', 'dubbed_by', 'dubCredits',
+          'featured', 'trending', 'views', 'type', 'contentType', 'content_type',
+          'isMovie', 'is_movie', 'duration',
+          'server1Url', 'server1_url', 'server2Url', 'server2_url', 'server3Url', 'server3_url',
+          'abyssUrl', 'abyss_url', 'filemoonUrl', 'filemoon_url', 'vdohideUrl', 'vdohide_url',
+          'videoUrl', 'video_url', 'createdAt', 'created_at', 'updatedAt', 'updated_at'
+        ])
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && isOptString(data.get('id', null), 128)
+        && isOptString(data.get('description', null), 10000)
+        && isOptString(data.get('synopsis', null), 10000)
+        && isOptString(data.get('posterUrl', null), 2048)
+        && isOptString(data.get('poster_url', null), 2048)
+        && isOptString(data.get('bannerUrl', null), 2048)
+        && isOptString(data.get('banner_url', null), 2048)
+        && (!('genres' in data) || data.genres == null || isValidStringList(data.genres, 20))
+        && (!('rating' in data) || data.rating is string || data.rating is int || data.rating is float)
+        && isOptString(data.get('status', null), 50)
+        && isOptString(data.get('language', null), 50)
+        && isOptString(data.get('studio', null), 120)
+        && isOptString(data.get('dubbedBy', null), 120)
+        && isOptString(data.get('dubbed_by', null), 120)
+        && isOptBool(data.get('featured', null))
+        && isOptBool(data.get('trending', null))
+        && isOptNumber(data.get('views', null))
+        && isOptBool(data.get('isMovie', null))
+        && isOptBool(data.get('is_movie', null))
+        && isOptString(data.get('duration', null), 50)
+        && isOptString(data.get('releaseDate', null), 50)
+        && isOptString(data.get('release_date', null), 50)
+        && isOptString(data.get('server1Url', null), 2048)
+        && isOptString(data.get('server1_url', null), 2048)
+        && isOptString(data.get('server2Url', null), 2048)
+        && isOptString(data.get('server2_url', null), 2048)
+        && isOptString(data.get('server3Url', null), 2048)
+        && isOptString(data.get('server3_url', null), 2048)
+        && isOptString(data.get('videoUrl', null), 2048)
+        && isOptString(data.get('video_url', null), 2048);
+    }
+
+    function isValidSeason(data) {
+      return data.keys().hasAll(['animeId', 'seasonNumber'])
+        && data.keys().hasOnly([
+          'id', 'animeId', 'anime_id', 'seasonNumber', 'season_number',
+          'title', 'description', 'posterUrl', 'poster_url', 'bannerUrl', 'banner_url',
+          'order', 'status', 'releaseYear', 'createdAt', 'created_at', 'updatedAt', 'updated_at'
+        ])
+        && isValidId(data.animeId)
+        && (data.seasonNumber is int || data.seasonNumber is float) && data.seasonNumber >= 0 && data.seasonNumber <= 500
+        && isOptString(data.get('title', null), 200)
+        && isOptString(data.get('description', null), 5000)
+        && isOptString(data.get('posterUrl', null), 2048)
+        && isOptString(data.get('poster_url', null), 2048)
+        && isOptString(data.get('bannerUrl', null), 2048)
+        && isOptString(data.get('banner_url', null), 2048)
+        && isOptNumber(data.get('order', null))
+        && isOptString(data.get('status', null), 50);
+    }
+
+    function isValidEpisode(data) {
+      return data.keys().hasAll(['animeId', 'episodeNumber'])
+        && data.keys().hasOnly([
+          'id', 'animeId', 'anime_id', 'seasonId', 'season_id', 'seasonNumber', 'season_number',
+          'episodeNumber', 'episode_number', 'title', 'episode_title', 'description',
+          'thumbnailUrl', 'thumbnail_url', 'posterUrl', 'poster_url', 'bannerUrl', 'banner_url',
+          'duration', 'releaseDate', 'release_date',
+          'server1Url', 'server1_url', 'abyssUrl', 'abyss_url',
+          'server2Url', 'server2_url', 'filemoonUrl', 'filemoon_url',
+          'server3Url', 'server3_url', 'vdohideUrl', 'vdohide_url',
+          'videoUrl', 'video_url',
+          'published', 'isEarlyAccess', 'is_early_access', 'isPremiumOnly', 'is_premium_only',
+          'isPremium', 'is_premium', 'views', 'introStart', 'introEnd', 'endingStart',
+          'createdAt', 'created_at', 'updatedAt', 'updated_at'
+        ])
+        && isValidId(data.animeId)
+        && (data.episodeNumber is int || data.episodeNumber is float) && data.episodeNumber >= 0 && data.episodeNumber <= 10000
+        && isOptString(data.get('seasonId', null), 128)
+        && isOptString(data.get('season_id', null), 128)
+        && isOptString(data.get('title', null), 250)
+        && isOptString(data.get('episode_title', null), 250)
+        && isOptString(data.get('description', null), 5000)
+        && isOptString(data.get('thumbnailUrl', null), 2048)
+        && isOptString(data.get('thumbnail_url', null), 2048)
+        && isOptString(data.get('duration', null), 50)
+        && isOptString(data.get('releaseDate', null), 50)
+        && isOptString(data.get('server1Url', null), 2048)
+        && isOptString(data.get('server1_url', null), 2048)
+        && isOptString(data.get('server2Url', null), 2048)
+        && isOptString(data.get('server2_url', null), 2048)
+        && isOptString(data.get('server3Url', null), 2048)
+        && isOptString(data.get('server3_url', null), 2048)
+        && isOptString(data.get('videoUrl', null), 2048)
+        && isOptBool(data.get('published', null))
+        && isOptBool(data.get('isEarlyAccess', null))
+        && isOptBool(data.get('isPremiumOnly', null))
+        && isOptBool(data.get('isPremium', null))
+        && isOptNumber(data.get('views', null));
+    }
+
+    function isValidBanner(data) {
+      return data.keys().hasAll(['title', 'imageUrl'])
+        && data.keys().hasOnly(['id', 'title', 'subtitle', 'imageUrl', 'animeId', 'linkUrl', 'order', 'active', 'createdAt', 'updatedAt'])
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 250
+        && data.imageUrl is string && data.imageUrl.size() >= 1 && data.imageUrl.size() <= 2048
+        && isOptString(data.get('subtitle', null), 500)
+        && isOptString(data.get('animeId', null), 128)
+        && isOptString(data.get('linkUrl', null), 2048)
+        && isOptNumber(data.get('order', null))
+        && isOptBool(data.get('active', null));
+    }
+
+    function isValidFavorite(data) {
+      return data.keys().hasAll(['userId', 'animeId'])
+        && data.keys().hasOnly(['id', 'userId', 'user_id', 'animeId', 'anime_id', 'animeTitle', 'anime_title', 'title', 'posterUrl', 'poster_url', 'createdAt', 'created_at'])
+        && isValidId(data.userId) && data.userId == request.auth.uid
+        && isValidId(data.animeId)
+        && isOptString(data.get('animeTitle', null), 300)
+        && isOptString(data.get('anime_title', null), 300)
+        && isOptString(data.get('title', null), 300)
+        && isOptString(data.get('posterUrl', null), 2048)
+        && isOptString(data.get('poster_url', null), 2048)
+        && isOptTimestamp(data.get('createdAt', null))
+        && isOptTimestamp(data.get('created_at', null));
+    }
+
+    function isValidWatchHistory(data) {
+      return data.keys().hasAll(['userId', 'animeId', 'episodeId'])
+        && data.keys().hasOnly([
+          'id', 'userId', 'user_id', 'animeId', 'anime_id', 'animeTitle', 'anime_title',
+          'episodeId', 'episode_id', 'episodeTitle', 'episode_title',
+          'seasonId', 'season_id', 'seasonNumber', 'season_number', 'episodeNumber', 'episode_number',
+          'posterUrl', 'poster_url', 'currentTime', 'current_time', 'duration', 'duration_seconds',
+          'progress_seconds', 'percentage', 'updatedAt', 'updated_at', 'last_watched', 'createdAt'
+        ])
+        && isValidId(data.userId) && data.userId == request.auth.uid
+        && isValidId(data.animeId)
+        && isValidId(data.episodeId)
+        && isOptString(data.get('animeTitle', null), 300)
+        && isOptString(data.get('anime_title', null), 300)
+        && isOptString(data.get('episodeTitle', null), 250)
+        && isOptString(data.get('episode_title', null), 250)
+        && isOptString(data.get('seasonId', null), 128)
+        && isOptString(data.get('season_id', null), 128)
+        && isOptNumber(data.get('seasonNumber', null))
+        && isOptNumber(data.get('season_number', null))
+        && isOptNumber(data.get('episodeNumber', null))
+        && isOptNumber(data.get('episode_number', null))
+        && isOptString(data.get('posterUrl', null), 2048)
+        && isOptString(data.get('poster_url', null), 2048)
+        && isOptNumber(data.get('currentTime', null))
+        && isOptNumber(data.get('current_time', null))
+        && isOptNumber(data.get('duration', null))
+        && isOptNumber(data.get('duration_seconds', null))
+        && isOptNumber(data.get('progress_seconds', null))
+        && isOptNumber(data.get('percentage', null));
+    }
+
+    function isValidWatchlist(data) {
+      return data.keys().hasAll(['userId', 'animeId'])
+        && data.keys().hasOnly(['id', 'userId', 'user_id', 'animeId', 'anime_id', 'animeTitle', 'anime_title', 'title', 'posterUrl', 'poster_url', 'status', 'createdAt', 'created_at'])
+        && isValidId(data.userId) && data.userId == request.auth.uid
+        && isValidId(data.animeId)
+        && isOptString(data.get('animeTitle', null), 300)
+        && isOptString(data.get('anime_title', null), 300)
+        && isOptString(data.get('title', null), 300)
+        && isOptString(data.get('posterUrl', null), 2048)
+        && isOptString(data.get('poster_url', null), 2048)
+        && isOptString(data.get('status', null), 50);
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll(['animeId', 'userId', 'text', 'createdAt'])
+        && data.keys().hasOnly(['animeId', 'episodeId', 'userId', 'userName', 'userPhoto', 'text', 'createdAt', 'updatedAt'])
+        && isValidId(data.animeId)
+        && isValidId(data.userId)
+        && isOptString(data.get('episodeId', null), 128)
+        && isOptString(data.get('userName', null), 120)
+        && isOptString(data.get('userPhoto', null), 2048)
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 2000
+        && isOptTimestamp(data.createdAt);
+    }
+
+    function isValidRating(data) {
+      return data.keys().hasAll(['animeId', 'userId', 'score'])
+        && data.keys().hasOnly(['animeId', 'userId', 'score', 'review', 'createdAt', 'updatedAt'])
+        && isValidId(data.animeId)
+        && isValidId(data.userId)
+        && (data.score is int || data.score is float) && data.score >= 1 && data.score <= 10
+        && isOptString(data.get('review', null), 1000);
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['title', 'message', 'type', 'createdAt'])
+        && data.keys().hasOnly(['title', 'message', 'type', 'link', 'userId', 'isPublic', 'read', 'createdAt'])
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.message is string && data.message.size() >= 1 && data.message.size() <= 1000
+        && data.type in ['episode', 'anime', 'announcement', 'system']
+        && isOptString(data.get('link', null), 500)
+        && isOptString(data.get('userId', null), 128)
+        && isOptBool(data.get('isPublic', null))
+        && isOptBool(data.get('read', null))
+        && isOptTimestamp(data.createdAt);
+    }
+
+    function isValidSettings(data) {
+      return data.keys().hasAll(['websiteName'])
+        && data.keys().hasOnly([
+          'id', 'websiteName', 'website_name', 'tagline', 'logoUrl', 'logo_url',
+          'telegramLink', 'telegram_link', 'discordLink', 'discord_link',
+          'youtubeLink', 'youtube_link', 'facebookLink', 'facebook_link',
+          'theme', 'maintenanceMode', 'maintenance_mode', 'maintenanceMessage', 'maintenance_message',
+          'sessionTimeoutMinutes', 'session_timeout_minutes', 'updatedAt', 'updated_at'
+        ])
+        && data.websiteName is string && data.websiteName.size() >= 1 && data.websiteName.size() <= 120
+        && isOptString(data.get('tagline', null), 250)
+        && isOptString(data.get('logoUrl', null), 2048)
+        && isOptString(data.get('telegramLink', null), 500)
+        && isOptString(data.get('discordLink', null), 500)
+        && isOptString(data.get('youtubeLink', null), 500)
+        && isOptString(data.get('facebookLink', null), 500)
+        && isOptString(data.get('theme', null), 50)
+        && isOptBool(data.get('maintenanceMode', null))
+        && isOptString(data.get('maintenanceMessage', null), 1000)
+        && isOptNumber(data.get('sessionTimeoutMinutes', null));
+    }
+
+    function isValidAnalyticsDoc(data) {
+      return data.keys().hasAll(['dateKey', 'updatedAt'])
+        && data.keys().hasOnly(['dateKey', 'totalViews', 'totalPlays', 'uniqueVisitors', 'watchSeconds', 'updatedAt'])
+        && data.dateKey is string && data.dateKey.size() <= 40
+        && isOptNumber(data.get('totalViews', null))
+        && isOptNumber(data.get('totalPlays', null))
+        && isOptNumber(data.get('uniqueVisitors', null))
+        && isOptNumber(data.get('watchSeconds', null))
+        && isOptTimestamp(data.updatedAt);
+    }
+
+    function isValidAdminLog(data) {
+      return data.keys().hasAll(['action', 'category', 'timestamp'])
+        && data.keys().hasOnly(['id', 'action', 'category', 'details', 'user', 'timestamp'])
+        && data.action is string && data.action.size() >= 1 && data.action.size() <= 200
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 50
+        && isOptString(data.get('details', null), 2000)
+        && isOptString(data.get('user', null), 150)
+        && isOptTimestamp(data.timestamp);
+    }
+
+    function isValidPremiumPlan(data) {
+      return data.keys().hasAll(['name', 'tier', 'price'])
+        && data.keys().hasOnly(['id', 'name', 'tier', 'price', 'currency', 'durationDays', 'features', 'active', 'createdAt', 'updatedAt'])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.tier in ['free', 'pro', 'vip']
+        && (data.price is int || data.price is float) && data.price >= 0 && data.price <= 1000000
+        && isOptString(data.get('currency', null), 10)
+        && isOptNumber(data.get('durationDays', null))
+        && isOptBool(data.get('active', null));
+    }
+
+    function isValidPayment(data) {
+      return data.keys().hasAll(['userId', 'planId', 'amount', 'status', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'planId', 'amount', 'currency', 'status', 'provider', 'referenceId', 'createdAt', 'updatedAt'])
+        && isValidId(data.userId)
+        && isValidId(data.planId)
+        && (data.amount is int || data.amount is float) && data.amount >= 0 && data.amount <= 1000000
+        && data.status in ['pending', 'completed', 'failed', 'refunded']
+        && isOptString(data.get('currency', null), 10)
+        && isOptString(data.get('provider', null), 50)
+        && isOptString(data.get('referenceId', null), 200)
+        && isOptTimestamp(data.createdAt);
+    }
+
+    function isValidAdminNotification(data) {
+      return data.keys().hasAll(['type', 'title', 'timestamp'])
+        && data.keys().hasOnly(['type', 'title', 'details', 'category', 'actionUrl', 'timestamp', 'read', 'userEmail', 'userName', 'userPhoto'])
+        && data.type is string && data.type.size() <= 64
+        && data.title is string && data.title.size() <= 200
+        && isOptString(data.get('details', null), 1000)
+        && isOptString(data.get('category', null), 64)
+        && isOptString(data.get('actionUrl', null), 300)
+        && isOptString(data.get('userEmail', null), 150)
+        && isOptString(data.get('userName', null), 120)
+        && isOptString(data.get('userPhoto', null), 2048)
+        && isOptBool(data.get('read', null))
+        && isOptTimestamp(data.timestamp);
+    }
+
+    function isValidLiveVisitor(data, visitorId) {
+      return data.keys().hasAll(['visitorId', 'lastActivityAt'])
+        && data.keys().hasOnly([
+          'visitorId', 'userId', 'userName', 'userEmail', 'isLoggedIn',
+          'device', 'browser', 'os', 'country', 'countryCode',
+          'currentPage', 'currentTitle', 'currentAnimeTitle', 'currentEpisode',
+          'currentAnimeId', 'currentEpisodeId', 'isPlaying', 'lastActivityAt', 'startedAt', 'referrer'
+        ])
+        && data.visitorId is string && data.visitorId == visitorId
+        && isOptString(data.get('userId', null), 128)
+        && isOptString(data.get('userName', null), 120)
+        && isOptString(data.get('userEmail', null), 150)
+        && isOptBool(data.get('isLoggedIn', null))
+        && isOptString(data.get('device', null), 40)
+        && isOptString(data.get('browser', null), 60)
+        && isOptString(data.get('os', null), 60)
+        && isOptString(data.get('country', null), 80)
+        && isOptString(data.get('countryCode', null), 10)
+        && isOptString(data.get('currentPage', null), 300)
+        && isOptString(data.get('currentTitle', null), 300)
+        && isOptString(data.get('currentAnimeTitle', null), 300)
+        && isOptNumber(data.get('currentEpisode', null))
+        && isOptString(data.get('currentAnimeId', null), 128)
+        && isOptString(data.get('currentEpisodeId', null), 128)
+        && isOptBool(data.get('isPlaying', null))
+        && isOptTimestamp(data.lastActivityAt)
+        && isOptTimestamp(data.get('startedAt', null))
+        && isOptString(data.get('referrer', null), 300);
+    }
+
+    function isValidAnalyticsEvent(data) {
+      return data.keys().hasAll(['type', 'visitorId', 'timestamp'])
+        && data.keys().hasOnly([
+          'type', 'path', 'title', 'animeId', 'animeTitle', 'episodeId', 'episodeNumber',
+          'visitorId', 'userId', 'userEmail', 'device', 'browser', 'country', 'referrer',
+          'duration', 'progressSeconds', 'queryText', 'ratingValue', 'timestamp'
+        ])
+        && data.type in ['page_view', 'play', 'duration', 'completion', 'search', 'favorite', 'rating', 'comment']
+        && data.visitorId is string && data.visitorId.size() <= 128
+        && isOptTimestamp(data.timestamp)
+        && isOptString(data.get('path', null), 300)
+        && isOptString(data.get('title', null), 300)
+        && isOptString(data.get('animeId', null), 128)
+        && isOptString(data.get('animeTitle', null), 300)
+        && isOptString(data.get('episodeId', null), 128)
+        && isOptNumber(data.get('episodeNumber', null))
+        && isOptString(data.get('userId', null), 128)
+        && isOptString(data.get('userEmail', null), 150)
+        && isOptString(data.get('device', null), 40)
+        && isOptString(data.get('browser', null), 60)
+        && isOptString(data.get('country', null), 80)
+        && isOptString(data.get('referrer', null), 300)
+        && isOptNumber(data.get('duration', null))
+        && isOptNumber(data.get('progressSeconds', null))
+        && isOptString(data.get('queryText', null), 200)
+        && isOptNumber(data.get('ratingValue', null));
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Collection Security Rules
+    // -------------------------------------------------------------------------
+
+    // Connection ping check document
     match /test/{testId} {
-      allow read: if true;
+      allow get: if isValidId(testId);
+      allow list, write: if false;
     }
+
+    // Users: Strict PII isolation. Only self (get) or verified owner (get/list).
+    match /users/{userId} {
+      allow get: if isValidId(userId) && ((isSignedIn() && request.auth.uid == userId) || isOwner());
+      allow list: if isOwner();
+      allow create: if isValidId(userId) && isSignedIn() && isValidUser(incoming(), userId) && (
+        isOwner() || (
+          request.auth.uid == userId
+          && (!('role' in incoming()) || incoming().role == 'user')
+          && (!('isBanned' in incoming()) || incoming().isBanned == false)
+          && (!('is_banned' in incoming()) || incoming().is_banned == false)
+          && (!('isPremium' in incoming()) || incoming().isPremium == false)
+          && (!('is_premium' in incoming()) || incoming().is_premium == false)
+          && (!('premiumTier' in incoming()) || incoming().premiumTier == 'free')
+          && (!('premium_tier' in incoming()) || incoming().premium_tier == 'free')
+        )
+      );
+      allow update: if isValidId(userId) && isSignedIn() && isValidUser(incoming(), userId) && (
+        isOwner() || (
+          request.auth.uid == userId
+          && incoming().uid == existing().uid
+          && incoming().get('createdAt', null) == existing().get('createdAt', null)
+          && incoming().get('role', 'user') == existing().get('role', 'user')
+          && incoming().get('isBanned', false) == existing().get('isBanned', false)
+          && incoming().get('is_banned', false) == existing().get('is_banned', false)
+          && incoming().get('isPremium', false) == existing().get('isPremium', false)
+          && incoming().get('is_premium', false) == existing().get('is_premium', false)
+          && incoming().get('premiumTier', 'free') == existing().get('premiumTier', 'free')
+          && incoming().get('premium_tier', 'free') == existing().get('premium_tier', 'free')
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'displayName', 'full_name', 'username',
+            'photoURL', 'profilePhoto', 'photo_url', 'avatarUrl',
+            'lastLogin', 'last_login', 'lastLoginAt', 'updatedAt', 'updated_at',
+            'settings'
+          ])
+        )
+      );
+      allow delete: if isValidId(userId) && isOwner();
+    }
+
+    // Public Anime Catalog (Read-only for users/guests, Write strictly for verified owner)
     match /anime/{animeId} {
-      allow read: if true;
-      allow write: if isSuperAdmin();
+      allow get: if isValidId(animeId) && (existing().title is string || isOwner());
+      allow list: if existing().title is string || isOwner();
+      allow create, update: if isValidId(animeId) && isOwner() && isValidAnime(incoming());
+      allow delete: if isValidId(animeId) && isOwner();
     }
+
+    // Public Seasons (Read-only for users/guests, Write strictly for verified owner)
     match /seasons/{seasonId} {
-      allow read: if true;
-      allow write: if isSuperAdmin();
+      allow get: if isValidId(seasonId) && (existing().animeId is string || isOwner());
+      allow list: if existing().animeId is string || isOwner();
+      allow create, update: if isValidId(seasonId) && isOwner() && isValidSeason(incoming());
+      allow delete: if isValidId(seasonId) && isOwner();
     }
+
+    // Episodes (Published episodes readable by public; drafts and writes restricted to verified owner)
     match /episodes/{episodeId} {
-      allow read: if true;
-      allow write: if isSuperAdmin();
+      allow get: if isValidId(episodeId) && (existing().published != false || isOwner());
+      allow list: if existing().published != false || isOwner();
+      allow create, update: if isValidId(episodeId) && isOwner() && isValidEpisode(incoming());
+      allow delete: if isValidId(episodeId) && isOwner();
     }
+
+    // Banners (Public promotional hero banners, Write strictly for verified owner)
+    match /banners/{bannerId} {
+      allow get: if isValidId(bannerId) && (existing().active != false || isOwner());
+      allow list: if existing().active != false || isOwner();
+      allow create, update: if isValidId(bannerId) && isOwner() && isValidBanner(incoming());
+      allow delete: if isValidId(bannerId) && isOwner();
+    }
+
+    // Favorites (Per-user private collection)
     match /favorites/{favoriteId} {
-      allow read, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
-      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow get: if isValidId(favoriteId) && isSignedIn() && (existing().userId == request.auth.uid || isOwner());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isOwner());
+      allow create: if isValidId(favoriteId) && isSignedIn() && isValidFavorite(incoming());
+      allow update: if isValidId(favoriteId) && isSignedIn() && isValidFavorite(incoming()) && (
+        isOwner() || (
+          existing().userId == request.auth.uid
+          && incoming().userId == existing().userId
+          && incoming().animeId == existing().animeId
+          && incoming().diff(existing()).affectedKeys().hasOnly(['animeTitle', 'anime_title', 'title', 'posterUrl', 'poster_url'])
+        )
+      );
+      allow delete: if isValidId(favoriteId) && isSignedIn() && (existing().userId == request.auth.uid || isOwner());
     }
-    match /history/{historyId} {
-      allow read, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
-      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+
+    // Watch History & Continue Watching (Per-user private collection)
+    match /watchHistory/{historyId} {
+      allow get: if isValidId(historyId) && isSignedIn() && (existing().userId == request.auth.uid || isOwner());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isOwner());
+      allow create: if isValidId(historyId) && isSignedIn() && isValidWatchHistory(incoming());
+      allow update: if isValidId(historyId) && isSignedIn() && isValidWatchHistory(incoming()) && (
+        isOwner() || (
+          existing().userId == request.auth.uid
+          && incoming().userId == existing().userId
+          && incoming().animeId == existing().animeId
+          && incoming().episodeId == existing().episodeId
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'animeTitle', 'anime_title', 'episodeTitle', 'episode_title',
+            'seasonId', 'season_id', 'seasonNumber', 'season_number', 'episodeNumber', 'episode_number',
+            'posterUrl', 'poster_url', 'currentTime', 'current_time', 'duration', 'duration_seconds',
+            'progress_seconds', 'percentage', 'updatedAt', 'updated_at', 'last_watched'
+          ])
+        )
+      );
+      allow delete: if isValidId(historyId) && isSignedIn() && (existing().userId == request.auth.uid || isOwner());
     }
-    match /settings/{settingId} {
-      allow read: if true;
-      allow write: if isSuperAdmin();
+
+    // Watchlist (Per-user private collection)
+    match /watchlist/{watchlistId} {
+      allow get: if isValidId(watchlistId) && isSignedIn() && (existing().userId == request.auth.uid || isOwner());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isOwner());
+      allow create: if isValidId(watchlistId) && isSignedIn() && isValidWatchlist(incoming());
+      allow update: if isValidId(watchlistId) && isSignedIn() && isValidWatchlist(incoming()) && (
+        isOwner() || (
+          existing().userId == request.auth.uid
+          && incoming().userId == existing().userId
+          && incoming().animeId == existing().animeId
+          && incoming().diff(existing()).affectedKeys().hasOnly(['animeTitle', 'anime_title', 'title', 'posterUrl', 'poster_url', 'status'])
+        )
+      );
+      allow delete: if isValidId(watchlistId) && isSignedIn() && (existing().userId == request.auth.uid || isOwner());
     }
-    match /homepage/{docId} {
-      allow read: if true;
-      allow write: if isSuperAdmin();
-    }
-    match /analytics/{docId} {
-      allow read: if true;
-      allow write: if isSuperAdmin();
-    }
-    match /activity_logs/{logId} {
-      allow read: if isSuperAdmin();
-      allow write: if isSuperAdmin();
-    }
-    match /login_history/{logId} {
-      allow read: if isSuperAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isSuperAdmin();
-    }
+
+    // Comments (Publicly readable, authenticated user-owned writes referencing valid anime)
     match /comments/{commentId} {
-      allow read: if true;
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && (request.auth.uid == resource.data.userId || isSuperAdmin());
+      allow get: if isValidId(commentId) && (existing().text is string || isOwner());
+      allow list: if existing().text is string || isOwner();
+      allow create: if isValidId(commentId) && isSignedIn() && isValidComment(incoming())
+        && incoming().userId == request.auth.uid
+        && exists(/databases/$(database)/documents/anime/$(request.resource.data.animeId));
+      allow update: if isValidId(commentId) && isSignedIn() && isValidComment(incoming()) && (
+        isOwner() || (
+          existing().userId == request.auth.uid
+          && incoming().userId == existing().userId
+          && incoming().animeId == existing().animeId
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['text', 'updatedAt'])
+        )
+      );
+      allow delete: if isValidId(commentId) && isSignedIn() && (existing().userId == request.auth.uid || isOwner());
     }
+
+    // Ratings (Publicly readable, authenticated user-owned writes referencing valid anime)
+    match /ratings/{ratingId} {
+      allow get: if isValidId(ratingId) && (existing().score is int || existing().score is float || isOwner());
+      allow list: if existing().score is int || existing().score is float || isOwner();
+      allow create: if isValidId(ratingId) && isSignedIn() && isValidRating(incoming())
+        && incoming().userId == request.auth.uid
+        && exists(/databases/$(database)/documents/anime/$(request.resource.data.animeId));
+      allow update: if isValidId(ratingId) && isSignedIn() && isValidRating(incoming()) && (
+        isOwner() || (
+          existing().userId == request.auth.uid
+          && incoming().userId == existing().userId
+          && incoming().animeId == existing().animeId
+          && incoming().diff(existing()).affectedKeys().hasOnly(['score', 'review', 'updatedAt'])
+        )
+      );
+      allow delete: if isValidId(ratingId) && isSignedIn() && (existing().userId == request.auth.uid || isOwner());
+    }
+
+    // Notifications (Public release/maintenance broadcasts + user-targeted alerts)
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId) && (
+        existing().get('isPublic', false) == true
+        || (isSignedIn() && existing().get('userId', '') == request.auth.uid)
+        || isOwner()
+      );
+      allow list: if existing().get('isPublic', false) == true
+        || (isSignedIn() && existing().get('userId', '') == request.auth.uid)
+        || isOwner();
+      allow create: if isValidId(notificationId) && isOwner() && isValidNotification(incoming());
+      allow update: if isValidId(notificationId) && isValidNotification(incoming()) && (
+        isOwner() || (
+          isSignedIn()
+          && existing().get('userId', '') == request.auth.uid
+          && incoming().diff(existing()).affectedKeys().hasOnly(['read'])
+        )
+      );
+      allow delete: if isValidId(notificationId) && (
+        isOwner() || (isSignedIn() && existing().get('userId', '') == request.auth.uid)
+      );
+    }
+
+    // Website Settings (Publicly readable, Write strictly for verified owner)
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && (existing().websiteName is string || isOwner());
+      allow list: if existing().websiteName is string || isOwner();
+      allow create, update: if isValidId(settingId) && isOwner() && isValidSettings(incoming());
+      allow delete: if isValidId(settingId) && isOwner();
+    }
+
+    // Analytics Aggregates (Strictly owner-only)
+    match /analytics/{analyticsId} {
+      allow get: if isValidId(analyticsId) && isOwner();
+      allow list: if isOwner();
+      allow create, update: if isValidId(analyticsId) && isOwner() && isValidAnalyticsDoc(incoming());
+      allow delete: if isValidId(analyticsId) && isOwner();
+    }
+
+    // Admin Audit Logs (Strictly owner-only)
+    match /adminLogs/{logId} {
+      allow get: if isValidId(logId) && isOwner();
+      allow list: if isOwner();
+      allow create: if isValidId(logId) && isOwner() && isValidAdminLog(incoming());
+      allow update, delete: if isValidId(logId) && isOwner();
+    }
+
+    // Premium Plans (Publicly readable, Write strictly for verified owner)
+    match /premiumPlans/{planId} {
+      allow get: if isValidId(planId) && (existing().active != false || isOwner());
+      allow list: if existing().active != false || isOwner();
+      allow create, update: if isValidId(planId) && isOwner() && isValidPremiumPlan(incoming());
+      allow delete: if isValidId(planId) && isOwner();
+    }
+
+    // Payments (Strict user ownership; non-owners can only create pending payments for valid plans)
+    match /payments/{paymentId} {
+      allow get: if isValidId(paymentId) && isSignedIn() && (existing().userId == request.auth.uid || isOwner());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isOwner());
+      allow create: if isValidId(paymentId) && isSignedIn() && isValidPayment(incoming()) && (
+        isOwner() || (
+          incoming().userId == request.auth.uid
+          && incoming().status == 'pending'
+          && exists(/databases/$(database)/documents/premiumPlans/$(request.resource.data.planId))
+        )
+      );
+      allow update: if isValidId(paymentId) && isOwner() && isValidPayment(incoming());
+      allow delete: if isValidId(paymentId) && isOwner();
+    }
+
+    // Admin Live Notifications
     match /admin_notifications/{notifId} {
-      allow read: if isSuperAdmin();
-      allow create: if true;
-      allow update, delete: if isSuperAdmin();
+      allow get: if isValidId(notifId) && isOwner();
+      allow list: if isOwner();
+      allow create: if isValidId(notifId) && isValidAdminNotification(incoming());
+      allow update, delete: if isValidId(notifId) && isOwner();
+    }
+
+    // Live Presence Telemetry (Write self visitor presence; Read strictly owner)
+    match /live_visitors/{visitorId} {
+      allow get: if isValidId(visitorId) && isOwner();
+      allow list: if isOwner();
+      allow create, update: if isValidId(visitorId) && isValidLiveVisitor(incoming(), visitorId);
+      allow delete: if isValidId(visitorId) && isOwner();
+    }
+
+    // Analytics Event Stream (Append telemetry; Read/Manage strictly owner)
+    match /analytics_events/{eventId} {
+      allow get: if isValidId(eventId) && isOwner();
+      allow list: if isOwner();
+      allow create: if isValidId(eventId) && isValidAnalyticsEvent(incoming());
+      allow update, delete: if isValidId(eventId) && isOwner();
     }
   }
 }

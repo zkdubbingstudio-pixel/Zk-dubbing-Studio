@@ -254,7 +254,7 @@ export default function AdminMedia() {
       {loading ? (
         <div className="flex flex-col items-center justify-center py-20 text-white/40">
           <div className="w-10 h-10 border-4 border-white/10 border-t-brand rounded-full animate-spin mb-3"></div>
-          <p className="text-sm">Scanning media assets across Firestore &amp; Supabase...</p>
+          <p className="text-sm">Scanning media assets across Cloud Firestore &amp; Firebase Storage...</p>
         </div>
       ) : filteredMedia.length === 0 ? (
         <div className="bg-black/40 border border-white/10 rounded-3xl p-12 text-center text-white/50">
