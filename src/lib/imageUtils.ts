@@ -284,11 +284,6 @@ export function getOptimizedWebPUrl(url?: string | null, type: 'poster' | 'banne
     return clean;
   }
 
-  // Firebase Storage URLs carry signed download tokens and are already compressed to WebP on upload
-  if (clean.includes('firebasestorage.googleapis.com')) {
-    return clean;
-  }
-
   // Cloudflare-backed open WebP compression edge service (wsrv.nl)
   // Compresses large external images down to lightweight WebP
   try {
@@ -310,7 +305,6 @@ export function preconnectImageOrigins(): void {
     'https://i.ibb.co',
     'https://i.ibb.co.com',
     'https://files.catbox.moe',
-    'https://firebasestorage.googleapis.com',
     'https://firestore.googleapis.com',
     'https://lh3.googleusercontent.com',
   ];

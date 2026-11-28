@@ -10,11 +10,11 @@ import {
   GoogleAuthProvider,
   signInWithPopup,
   trackFirebaseAnalyticsEvent,
-  handleFirestoreError,
-  OperationType,
+  testConnection,
 } from './firebase';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { User } from '../types';
+import { useAuthStore } from '../store/authStore';
 import { dispatchOwnerNotification } from './ownerNotificationService';
 import { checkLoginRateLimit, recordLoginFailure, resetLoginRateLimit } from './rateLimiter';
 import { sanitizeString, sanitizeUrl } from './security';
@@ -48,8 +48,41 @@ const DEFAULT_USER_SETTINGS = {
 };
 
 /**
- * Loads user profile strictly from Cloud Firestore (users/{uid})
- * adhering to Zero-Trust Firestore Security Rules.
+ * Creates a default user profile object immediately upon successful Firebase Auth
+ * without waiting for Firestore.
+ */
+function createDefaultUserProfile(uid: string, email?: string | null, fallbackName?: string | null, fallbackPhoto?: string | null): User {
+  const cleanEmail = sanitizeString(email || '', 150).trim().toLowerCase();
+  const isOwnerUser = isAuthorizedAdmin(cleanEmail);
+  const displayName = sanitizeString(
+    fallbackName || (cleanEmail ? cleanEmail.split('@')[0] : 'Anime Fan'),
+    120
+  );
+  const resolvedPhoto = sanitizeUrl(fallbackPhoto || auth?.currentUser?.photoURL || '');
+  const role: 'owner' | 'user' = isOwnerUser ? 'owner' : 'user';
+
+  return {
+    uid: uid || 'anon',
+    id: uid || 'anon',
+    email: cleanEmail,
+    name: displayName,
+    displayName,
+    full_name: displayName,
+    photoURL: resolvedPhoto,
+    profilePhoto: resolvedPhoto,
+    role,
+    isBanned: false,
+    isPremium: false,
+    premiumTier: 'free',
+    createdAt: Date.now(),
+    lastLogin: new Date().toISOString(),
+    settings: DEFAULT_USER_SETTINGS,
+  };
+}
+
+/**
+ * Loads user profile from Cloud Firestore in the background with a strict 3-second timeout.
+ * If Firestore fails or times out, uses default profile object without blocking.
  */
 export async function loadUserProfileFromFirestore(
   uid: string,
@@ -58,17 +91,7 @@ export async function loadUserProfileFromFirestore(
   fallbackPhoto?: string | null
 ): Promise<User> {
   if (!uid) {
-    return {
-      uid: 'anon',
-      id: 'anon',
-      email: email || '',
-      name: fallbackName || 'Anime Fan',
-      displayName: fallbackName || 'Anime Fan',
-      photoURL: '',
-      role: 'user',
-      isBanned: false,
-      createdAt: Date.now(),
-    };
+    return createDefaultUserProfile('anon', email, fallbackName, fallbackPhoto);
   }
 
   const cached = userProfileCache.get(uid);
@@ -76,112 +99,68 @@ export async function loadUserProfileFromFirestore(
     return cached.user;
   }
 
-  const cleanEmail = sanitizeString(email || '', 150).trim().toLowerCase();
-  const isOwnerUser = isAuthorizedAdmin(cleanEmail);
-  const nowIso = new Date().toISOString();
+  const defaultProfile = createDefaultUserProfile(uid, email, fallbackName, fallbackPhoto);
 
-  let profileData: any = null;
-  let docExists = false;
-
-  if (db) {
-    try {
-      const snap = await getDoc(doc(db, 'users', uid));
-      if (snap.exists()) {
-        docExists = true;
-        profileData = snap.data();
-      }
-    } catch (err: any) {
-      if (String(err?.message || '').includes('permission')) {
-        handleFirestoreError(err, OperationType.GET, `users/${uid}`);
-      }
-    }
+  if (!db) {
+    useAuthStore.getState().setDatabaseError('Offline mode');
+    return defaultProfile;
   }
 
-  const displayName = sanitizeString(
-    profileData?.displayName ||
-      profileData?.name ||
-      profileData?.full_name ||
-      profileData?.username ||
-      fallbackName ||
-      (cleanEmail ? cleanEmail.split('@')[0] : 'Anime Fan'),
-    120
-  );
+  try {
+    const docRef = doc(db, 'users', uid);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Firestore operation timed out after 3s')), 3000)
+    );
+    const snap = (await Promise.race([getDoc(docRef), timeoutPromise])) as any;
+    if (snap && snap.exists()) {
+      const profileData = snap.data();
+      const cleanEmail = sanitizeString(profileData?.email || email || '', 150).trim().toLowerCase();
+      const isOwnerUser = isAuthorizedAdmin(cleanEmail);
+      const displayName = sanitizeString(
+        profileData?.displayName || profileData?.name || profileData?.full_name || fallbackName || (cleanEmail ? cleanEmail.split('@')[0] : 'Anime Fan'),
+        120
+      );
+      const resolvedPhoto = sanitizeUrl(profileData?.photoURL || profileData?.photo_url || fallbackPhoto || '');
 
-  const resolvedPhoto = sanitizeUrl(
-    profileData?.photoURL ||
-      profileData?.photo_url ||
-      profileData?.profilePhoto ||
-      fallbackPhoto ||
-      auth?.currentUser?.photoURL ||
-      ''
-  );
-
-  const createdAtMs =
-    typeof profileData?.createdAt === 'number'
-      ? profileData.createdAt
-      : profileData?.created_at
-      ? new Date(profileData.created_at).getTime() || Date.now()
-      : Date.now();
-
-  const userRecord: User = {
-    uid,
-    id: uid,
-    email: cleanEmail || profileData?.email || '',
-    name: displayName,
-    displayName,
-    full_name: displayName,
-    photoURL: resolvedPhoto,
-    profilePhoto: resolvedPhoto,
-    role: isOwnerUser ? 'owner' : 'user',
-    isBanned: Boolean(profileData?.isBanned ?? profileData?.is_banned),
-    isPremium: Boolean(profileData?.isPremium ?? profileData?.is_premium),
-    premiumTier: profileData?.premiumTier || profileData?.premium_tier || 'free',
-    createdAt: createdAtMs,
-    lastLogin: nowIso,
-    settings: profileData?.settings || DEFAULT_USER_SETTINGS,
-  };
-
-  // Persist / update user profile in Cloud Firestore respecting field immutability rules
-  if (db && auth?.currentUser && auth.currentUser.uid === uid) {
-    try {
-      const userRef = doc(db, 'users', uid);
-      if (!docExists) {
-        await setDoc(userRef, {
-          uid,
-          id: uid,
-          email: userRecord.email,
-          name: displayName,
-          displayName,
-          full_name: displayName,
-          photoURL: resolvedPhoto,
-          profilePhoto: resolvedPhoto,
-          role: isOwnerUser ? 'owner' : 'user',
-          isBanned: false,
-          isPremium: false,
-          premiumTier: 'free',
-          createdAt: createdAtMs,
-          lastLogin: nowIso,
-          updatedAt: nowIso,
-          settings: userRecord.settings,
-        });
-      } else {
-        const updatePayload: Record<string, any> = {
-          lastLogin: nowIso,
-          updatedAt: nowIso,
-        };
-        if (resolvedPhoto && !profileData?.photoURL) {
-          updatePayload.photoURL = resolvedPhoto;
-          updatePayload.profilePhoto = resolvedPhoto;
-        }
-        await updateDoc(userRef, updatePayload);
-      }
-    } catch {
-      // Non-blocking sync error if offline
+      const userRecord: User = {
+        uid,
+        id: uid,
+        email: cleanEmail,
+        name: displayName,
+        displayName,
+        full_name: displayName,
+        photoURL: resolvedPhoto,
+        profilePhoto: resolvedPhoto,
+        role: isOwnerUser ? 'owner' : 'user',
+        isBanned: Boolean(profileData?.isBanned ?? profileData?.is_banned),
+        isPremium: Boolean(profileData?.isPremium ?? profileData?.is_premium),
+        premiumTier: profileData?.premiumTier || profileData?.premium_tier || 'free',
+        createdAt: typeof profileData?.createdAt === 'number' ? profileData.createdAt : Date.now(),
+        lastLogin: new Date().toISOString(),
+        settings: profileData?.settings || DEFAULT_USER_SETTINGS,
+      };
+      userProfileCache.set(uid, { user: userRecord, timestamp: Date.now() });
+      useAuthStore.getState().setDatabaseError(null);
+      return userRecord;
     }
+  } catch (err: any) {
+    const code = err?.code || 'firestore/unavailable';
+    const msg = err?.message || String(err || '');
+    console.warn(`[Firestore Profile Load] Offline mode [${code}] ${msg}`);
+    useAuthStore.getState().setDatabaseError(`Offline mode ([${code}] ${msg})`);
   }
 
-  userProfileCache.set(uid, { user: userRecord, timestamp: Date.now() });
-  return userRecord;
+  return defaultProfile;
+}
+
+function retryFirestoreAfterLogin(): void {
+  void testConnection()
+    .then((ok) => {
+      useAuthStore.getState().setDatabaseError(ok ? null : 'Offline mode');
+    })
+    .catch(() => {
+      useAuthStore.getState().setDatabaseError('Offline mode');
+    });
 }
 
 export async function signInWithFirebase(email: string, password: string): Promise<User> {
@@ -193,7 +172,6 @@ export async function signInWithFirebase(email: string, password: string): Promi
     throw err;
   }
 
-  // Client + Server-side brute-force rate limit enforcement
   const localRate = checkLoginRateLimit(cleanEmail);
   if (!localRate.allowed) {
     const err = new Error(localRate.message || 'Too many failed login attempts. Please wait before retrying.');
@@ -225,25 +203,10 @@ export async function signInWithFirebase(email: string, password: string): Promi
 
   await ensureAuthPersistence();
 
+  let fbUser;
   try {
     const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password);
-    const fbUser = userCredential.user;
-
-    resetLoginRateLimit(cleanEmail);
-    fetch('/api/auth/rate-limit/record', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: cleanEmail, success: true }),
-    }).catch(() => {});
-
-    trackFirebaseAnalyticsEvent('login', { method: 'password' }).catch(() => {});
-
-    return await loadUserProfileFromFirestore(
-      fbUser.uid,
-      fbUser.email || cleanEmail,
-      fbUser.displayName,
-      fbUser.photoURL
-    );
+    fbUser = userCredential.user;
   } catch (err: any) {
     recordLoginFailure(cleanEmail);
     fetch('/api/auth/rate-limit/record', {
@@ -252,8 +215,34 @@ export async function signInWithFirebase(email: string, password: string): Promi
       body: JSON.stringify({ email: cleanEmail, success: false }),
     }).catch(() => {});
 
+    console.error('[Firebase Auth Error - signInWithEmailAndPassword]', {
+      code: err?.code || 'auth/unknown',
+      message: err?.message || String(err || ''),
+    });
     throw err;
   }
+
+  resetLoginRateLimit(cleanEmail);
+  fetch('/api/auth/rate-limit/record', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: cleanEmail, success: true }),
+  }).catch(() => {});
+
+  trackFirebaseAnalyticsEvent('login', { method: 'password' }).catch(() => {});
+  retryFirestoreAfterLogin();
+
+  // Return default profile immediately; load Firestore in background
+  const defaultUser = createDefaultUserProfile(fbUser.uid, fbUser.email || cleanEmail, fbUser.displayName, fbUser.photoURL);
+  
+  // Background profile sync
+  loadUserProfileFromFirestore(fbUser.uid, fbUser.email || cleanEmail, fbUser.displayName, fbUser.photoURL)
+    .then((resolved) => {
+      useAuthStore.getState().setUser(resolved);
+    })
+    .catch(() => {});
+
+  return defaultUser;
 }
 
 export async function signInWithGoogle(): Promise<User> {
@@ -266,22 +255,42 @@ export async function signInWithGoogle(): Promise<User> {
   await ensureAuthPersistence();
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
-  const result = await signInWithPopup(auth, provider);
-  const fbUser = result.user;
+
+  let fbUser;
+  try {
+    const result = await signInWithPopup(auth, provider);
+    fbUser = result.user;
+  } catch (err: any) {
+    console.error('[Firebase Auth Error - Google Sign-In]', {
+      code: err?.code || 'auth/unknown',
+      message: err?.message || String(err || ''),
+    });
+    throw err;
+  }
 
   trackFirebaseAnalyticsEvent('login', { method: 'google' }).catch(() => {});
+  retryFirestoreAfterLogin();
 
-  return await loadUserProfileFromFirestore(
-    fbUser.uid,
-    fbUser.email,
-    fbUser.displayName,
-    fbUser.photoURL
-  );
+  const defaultUser = createDefaultUserProfile(fbUser.uid, fbUser.email, fbUser.displayName, fbUser.photoURL);
+
+  loadUserProfileFromFirestore(fbUser.uid, fbUser.email, fbUser.displayName, fbUser.photoURL)
+    .then((resolved) => {
+      useAuthStore.getState().setUser(resolved);
+    })
+    .catch(() => {});
+
+  return defaultUser;
 }
 
 export async function signUpWithFirebase(email: string, password: string, fullName: string): Promise<User> {
   const cleanEmail = sanitizeString(email, 150).trim().toLowerCase();
   const cleanName = sanitizeString(fullName, 100).trim();
+
+  if (!cleanEmail) {
+    const err = new Error('Please enter a valid email address.');
+    (err as any).code = 'auth/invalid-email';
+    throw err;
+  }
 
   if (!auth) {
     const err = new Error('Firebase Authentication is not initialized.');
@@ -291,88 +300,89 @@ export async function signUpWithFirebase(email: string, password: string, fullNa
 
   await ensureAuthPersistence();
 
-  const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-  const fbUser = userCredential.user;
+  let fbUser;
+  try {
+    const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+    fbUser = userCredential.user;
+  } catch (err: any) {
+    console.error('[Firebase Auth Error - createUserWithEmailAndPassword]', {
+      code: err?.code || 'auth/unknown',
+      message: err?.message || String(err || ''),
+    });
+    throw err;
+  }
 
   if (cleanName) {
     try {
       await updateProfile(fbUser, { displayName: cleanName });
-    } catch {}
+    } catch (err: any) {
+      console.warn('[Firebase Auth Warning - updateProfile]', err?.code || 'auth/unknown', err?.message || err);
+    }
   }
 
-  const isOwnerUser = isAuthorizedAdmin(fbUser.email || cleanEmail);
-  const role: 'owner' | 'user' = isOwnerUser ? 'owner' : 'user';
-  const nowIso = new Date().toISOString();
-  const createdAtMs = Date.now();
-  const finalName = cleanName || fbUser.displayName || cleanEmail.split('@')[0];
+  const defaultUser = createDefaultUserProfile(fbUser.uid, fbUser.email || cleanEmail, cleanName || fbUser.displayName, fbUser.photoURL);
 
-  const userRecord: User = {
-    uid: fbUser.uid,
-    id: fbUser.uid,
-    email: fbUser.email || cleanEmail,
-    name: finalName,
-    displayName: finalName,
-    full_name: finalName,
-    photoURL: fbUser.photoURL || '',
-    profilePhoto: fbUser.photoURL || '',
-    role,
-    isBanned: false,
-    isPremium: false,
-    premiumTier: 'free',
-    createdAt: createdAtMs,
-    lastLogin: nowIso,
-    settings: DEFAULT_USER_SETTINGS,
-  };
+  userProfileCache.set(fbUser.uid, { user: defaultUser, timestamp: Date.now() });
+  trackFirebaseAnalyticsEvent('sign_up', { method: 'password' }).catch(() => {});
+  retryFirestoreAfterLogin();
 
   if (db) {
-    try {
-      await setDoc(doc(db, 'users', fbUser.uid), {
-        uid: fbUser.uid,
-        id: fbUser.uid,
-        email: userRecord.email,
-        name: finalName,
-        displayName: finalName,
-        full_name: finalName,
-        photoURL: fbUser.photoURL || '',
-        profilePhoto: fbUser.photoURL || '',
-        role,
-        isBanned: false,
-        isPremium: false,
-        premiumTier: 'free',
-        createdAt: createdAtMs,
-        lastLogin: nowIso,
-        updatedAt: nowIso,
-        settings: DEFAULT_USER_SETTINGS,
-      });
-    } catch {}
+    setDoc(doc(db, 'users', fbUser.uid), {
+      uid: fbUser.uid,
+      id: fbUser.uid,
+      email: defaultUser.email,
+      name: defaultUser.name,
+      displayName: defaultUser.displayName,
+      full_name: defaultUser.full_name,
+      photoURL: defaultUser.photoURL,
+      profilePhoto: defaultUser.profilePhoto,
+      role: defaultUser.role,
+      isBanned: false,
+      isPremium: false,
+      premiumTier: 'free',
+      createdAt: defaultUser.createdAt,
+      lastLogin: defaultUser.lastLogin,
+      updatedAt: new Date().toISOString(),
+      settings: DEFAULT_USER_SETTINGS,
+    }).catch(() => {});
   }
 
-  userProfileCache.set(fbUser.uid, { user: userRecord, timestamp: Date.now() });
-  trackFirebaseAnalyticsEvent('sign_up', { method: 'password' }).catch(() => {});
-
-  if (!isOwnerUser) {
+  if (!isAuthorizedAdmin(defaultUser.email)) {
     dispatchOwnerNotification({
       type: 'new_user',
       title: 'New User Registered',
-      details: `${finalName} (${cleanEmail}) joined ZK Voice Hub`,
+      details: `${defaultUser.name} (${defaultUser.email}) joined ZK Voice Hub`,
       category: 'user',
-      userEmail: cleanEmail,
-      userName: finalName,
+      userEmail: defaultUser.email,
+      userName: defaultUser.name,
       actionUrl: '/admin/users',
     }).catch(() => {});
   }
 
-  return userRecord;
+  return defaultUser;
 }
 
 export async function sendFirebasePasswordReset(email: string): Promise<void> {
   const cleanEmail = email.trim();
+  if (!cleanEmail) {
+    const err = new Error('Please enter a valid email address.');
+    (err as any).code = 'auth/invalid-email';
+    throw err;
+  }
   if (!auth) {
     const err = new Error('Firebase Authentication is not initialized.');
     (err as any).code = 'auth/not-initialized';
     throw err;
   }
-  await sendPasswordResetEmail(auth, cleanEmail);
+  try {
+    await sendPasswordResetEmail(auth, cleanEmail);
+  } catch (err: any) {
+    console.error('[Firebase Auth Error - sendPasswordResetEmail]', {
+      code: err?.code || 'auth/unknown',
+      message: err?.message || String(err || ''),
+    });
+    throw err;
+  }
 }
 
 export async function signOutUser(): Promise<void> {
@@ -380,13 +390,19 @@ export async function signOutUser(): Promise<void> {
   if (auth) {
     try {
       await signOut(auth);
-    } catch {}
+    } catch (err: any) {
+      console.error('[Firebase Auth Error - signOut]', {
+        code: err?.code || 'auth/unknown',
+        message: err?.message || String(err || ''),
+      });
+      throw err;
+    }
   }
 }
 
 export async function getActiveAuthUser(): Promise<User | null> {
   if (auth?.currentUser) {
-    return await loadUserProfileFromFirestore(
+    return createDefaultUserProfile(
       auth.currentUser.uid,
       auth.currentUser.email,
       auth.currentUser.displayName,

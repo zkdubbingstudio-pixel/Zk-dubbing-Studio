@@ -92,7 +92,12 @@ export default function AdminAnime() {
   const fetchAnimeData = async () => {
     try {
       setError(null);
-      verifyFirestoreHealth().then(setFirestoreStatus).catch(() => {});
+      verifyFirestoreHealth()
+        .then((status) => {
+          setFirestoreStatus(status);
+          if (!status.ok) setError(status.details);
+        })
+        .catch(() => {});
       const list = await getAllAnime();
       setAnimeList(list || []);
     } catch (err: any) {
@@ -128,12 +133,16 @@ export default function AdminAnime() {
       invalidateCache();
       const statusRes = await verifyFirestoreHealth();
       setFirestoreStatus(statusRes);
+      if (!statusRes.ok) {
+        setError(statusRes.details);
+        return;
+      }
       const refreshed = await getAllAnime();
       setAnimeList(refreshed);
       setSuccessMsg('Cloud Firestore catalog cache refreshed!');
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: any) {
-      setError(`Failed to refresh Firestore cache: ${err?.message || String(err)}`);
+      setError(formatDbError(err));
     } finally {
       setRefreshingCache(false);
     }
@@ -341,8 +350,8 @@ export default function AdminAnime() {
       setAnimeList(prev => prev.map(a => a.id === anime.id ? updated : a));
       await saveAnimeBoth({ ...anime, featured: nextFeatured }, anime.id);
       logAdminActivity('Toggled Featured', 'anime', `${anime.title} -> ${nextFeatured ? 'Featured' : 'Standard'}`);
-    } catch {
-      setError("Failed to toggle featured status");
+    } catch (err: any) {
+      setError(formatDbError(err));
     }
   };
 
@@ -354,8 +363,8 @@ export default function AdminAnime() {
       setAnimeList(prev => prev.map(a => a.id === anime.id ? updated : a));
       await saveAnimeBoth({ ...anime, trending: nextTrending }, anime.id);
       logAdminActivity('Toggled Trending', 'anime', `${anime.title} -> ${nextTrending ? 'Trending' : 'Standard'}`);
-    } catch {
-      setError("Failed to toggle trending status");
+    } catch (err: any) {
+      setError(formatDbError(err));
     }
   };
 

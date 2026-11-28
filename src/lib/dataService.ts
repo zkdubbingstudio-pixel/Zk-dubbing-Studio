@@ -7,6 +7,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   setDoc,
   addDoc,
@@ -17,7 +18,15 @@ import {
   orderBy,
   limit,
 } from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType, trackFirebaseAnalyticsEvent } from './firebase';
+import {
+  auth,
+  db,
+  handleFirestoreError,
+  isFirestoreUnavailableError,
+  OperationType,
+  trackFirebaseAnalyticsEvent,
+} from './firebase';
+import { useAuthStore } from '../store/authStore';
 import { getCachedData, setCachedData, clearCachedData, clearCachePrefix } from './cache';
 import { resolveImageUrl } from './imageUtils';
 import { assertOwner, isOwnerEmail, sanitizeString, sanitizeUrl } from './security';
@@ -155,26 +164,47 @@ export interface BackupRecord {
 export const NEW_DROPS_EXPIRY_MS = 17 * 24 * 60 * 60 * 1000;
 
 export function formatDbError(error: unknown): string {
-  if (!error) return 'Unknown Firestore error';
-  if (typeof error === 'string') return error;
+  if (!error) return 'Offline mode';
+  if (typeof error === 'string') {
+    return isFirestoreUnavailableError(error) ? `Offline mode (${error})` : error;
+  }
   const err = error as any;
+  const code = err?.code ? String(err.code) : '';
+  let msg = '';
   if (err?.message) {
     try {
       const parsed = JSON.parse(err.message);
-      if (parsed?.error) return String(parsed.error);
+      if (parsed?.error) msg = String(parsed.error);
     } catch {}
-    return String(err.message);
+    if (!msg) msg = String(err.message);
+  } else {
+    msg = String(error);
   }
-  return String(error);
+
+  if (isFirestoreUnavailableError({ code, message: msg })) {
+    if (msg.startsWith('Offline mode')) return msg;
+    return code ? `Offline mode ([${code}] ${msg})` : `Offline mode (${msg})`;
+  }
+  if (code && !msg.includes(code)) {
+    return `[${code}] ${msg}`;
+  }
+  return msg;
 }
 
 export async function verifyFirestoreHealth(): Promise<{ ok: boolean; details: string }> {
-  if (!db) return { ok: false, details: 'Firestore instance not initialized' };
+  if (!db) {
+    const details = 'Offline mode ([firestore/not-initialized] Firestore instance not initialized)';
+    useAuthStore.getState().setDatabaseError(details);
+    return { ok: false, details };
+  }
   try {
-    await getDoc(doc(db, 'test', 'connection'));
+    await getDocFromServer(doc(db, 'test', 'connection'));
+    useAuthStore.getState().setDatabaseError(null);
     return { ok: true, details: 'Cloud Firestore rules and connection active' };
   } catch (err) {
-    return { ok: false, details: formatDbError(err) };
+    const details = formatDbError(err);
+    useAuthStore.getState().setDatabaseError(details);
+    return { ok: false, details };
   }
 }
 
@@ -691,7 +721,9 @@ export async function getUnifiedCatalog(): Promise<UnifiedCatalog> {
 
     return catalog;
   } catch (err) {
-    console.error('[Firestore Error - getUnifiedCatalog]:', formatDbError(err));
+    const formatted = formatDbError(err);
+    useAuthStore.getState().setDatabaseError(formatted);
+    console.warn('[Firestore Error - getUnifiedCatalog]:', formatted);
     const stale = getCachedData<UnifiedCatalog>(cacheKey, true);
     if (stale) return stale;
     return {

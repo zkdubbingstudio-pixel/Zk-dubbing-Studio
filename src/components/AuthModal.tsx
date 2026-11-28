@@ -26,7 +26,7 @@ import {
 type AuthTab = 'signin' | 'signup' | 'forgot';
 
 export default function AuthModal() {
-  const { isAuthModalOpen, setAuthModalOpen, setUser, setAuthSuccessMessage } = useAuthStore();
+  const { isAuthModalOpen, setAuthModalOpen, setUser, setAuthSuccessMessage, authError, setAuthError } = useAuthStore();
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState<AuthTab>('signin');
@@ -49,9 +49,17 @@ export default function AuthModal() {
   if (!isAuthModalOpen) return null;
 
   const isOwnerEmail = isAuthorizedAdmin(email);
+  const displayError = error || authError;
+
+  const formatAuthError = (err: any): string => {
+    const fbCode = err?.code || 'auth/unknown';
+    const fbMsg = err?.message || String(err || 'Authentication failed.');
+    return `[${fbCode}] ${fbMsg}`;
+  };
 
   const resetFormState = () => {
     setError(null);
+    setAuthError(null);
     setResetSuccess(false);
   };
 
@@ -70,14 +78,15 @@ export default function AuthModal() {
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setAuthError(null);
 
     const cleanEmail = email.trim();
     if (!cleanEmail) {
-      setError('Please enter your email address.');
+      setError('[auth/invalid-email] Please enter your email address.');
       return;
     }
     if (!password) {
-      setError('Please enter your password.');
+      setError('[auth/missing-password] Please enter your password.');
       return;
     }
 
@@ -99,7 +108,7 @@ export default function AuthModal() {
       // Redirect to Home immediately (Requirement 10)
       navigate('/', { replace: true });
     } catch (err: any) {
-      // 2. Log exact Firebase error code to console & 12. Report exact Firebase error code
+      // Log exact Firebase error code to console & display exact error code in UI
       const fbCode = err?.code || 'auth/unknown';
       const fbMsg = err?.message || String(err || '');
       console.error('[Firebase Auth Error - Sign In]', {
@@ -107,7 +116,7 @@ export default function AuthModal() {
         message: fbMsg,
         error: err,
       });
-      setError(err?.code ? `[${err.code}] ${fbMsg}` : fbMsg);
+      setError(formatAuthError(err));
     } finally {
       setIsLoading(false);
     }
@@ -117,25 +126,26 @@ export default function AuthModal() {
   const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setAuthError(null);
 
     const cleanName = fullName.trim();
     const cleanEmail = email.trim();
 
     if (!cleanName) {
-      setError('Please enter your Full Name.');
+      setError('[auth/invalid-display-name] Please enter your Full Name.');
       return;
     }
     if (!cleanEmail) {
-      setError('Please enter your email address.');
+      setError('[auth/invalid-email] Please enter your email address.');
       return;
     }
     if (!password) {
-      setError('Please enter a password.');
+      setError('[auth/missing-password] Please enter a password.');
       return;
     }
     // Custom password length checks removed (Requirement 4) - Firebase Authentication handles validation
     if (password !== confirmPassword) {
-      setError('Passwords do not match. Please verify both passwords match.');
+      setError('[auth/password-mismatch] Passwords do not match. Please verify both passwords match.');
       return;
     }
 
@@ -159,7 +169,7 @@ export default function AuthModal() {
       // Redirect to Home immediately (Requirement 10)
       navigate('/', { replace: true });
     } catch (err: any) {
-      // 2. Log exact Firebase error code to console & 12. Report exact Firebase error code
+      // Log exact Firebase error code to console & display exact error code in UI
       const fbCode = err?.code || 'auth/unknown';
       const fbMsg = err?.message || String(err || '');
       console.error('[Firebase Auth Error - Create Account]', {
@@ -167,7 +177,7 @@ export default function AuthModal() {
         message: fbMsg,
         error: err,
       });
-      setError(err?.code ? `[${err.code}] ${fbMsg}` : fbMsg);
+      setError(formatAuthError(err));
     } finally {
       setIsLoading(false);
     }
@@ -177,11 +187,12 @@ export default function AuthModal() {
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setAuthError(null);
     setResetSuccess(false);
 
     const cleanEmail = email.trim();
     if (!cleanEmail) {
-      setError('Please enter your email address to receive reset instructions.');
+      setError('[auth/invalid-email] Please enter your email address to receive reset instructions.');
       return;
     }
 
@@ -197,7 +208,7 @@ export default function AuthModal() {
         message: fbMsg,
         error: err,
       });
-      setError(err?.code ? `[${err.code}] ${fbMsg}` : fbMsg);
+      setError(formatAuthError(err));
     } finally {
       setIsLoading(false);
     }
@@ -291,10 +302,10 @@ export default function AuthModal() {
         )}
 
         {/* Error Alert */}
-        {error && (
+        {displayError && (
           <div className="mt-4 p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs flex items-start gap-2.5 animate-in fade-in relative z-10">
             <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
-            <div className="flex-1 leading-relaxed">{error}</div>
+            <div className="flex-1 leading-relaxed">{displayError}</div>
           </div>
         )}
 

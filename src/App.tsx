@@ -5,8 +5,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, lazy, Suspense } from 'react';
 import { useAuthStore } from './store/authStore';
-import { auth, onAuthStateChanged } from './lib/firebase';
-import { loadUserProfileFromFirestore } from './lib/authService';
+import { auth, onAuthStateChanged, testConnection } from './lib/firebase';
+import { isAuthorizedAdmin, loadUserProfileFromFirestore } from './lib/authService';
 
 import RootLayout from './layouts/RootLayout';
 import AdminLayout from './layouts/AdminLayout';
@@ -42,32 +42,70 @@ function PageFallback() {
 }
 
 export default function App() {
-  const { setUser, setFirebaseUser, setLoading } = useAuthStore();
+  const { setUser, setFirebaseUser, setLoading, setAuthError, setDatabaseError } = useAuthStore();
 
   useEffect(() => {
+    void testConnection()
+      .then((ok) => {
+        setDatabaseError(ok ? null : 'Offline mode');
+      })
+      .catch(() => {
+        setDatabaseError('Offline mode');
+      });
+
     // On app start: ONLY use Firebase onAuthStateChanged() (Requirement 6 & 7)
     let unsubscribe: (() => void) | undefined;
     if (auth) {
-      unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
-        if (fbUser) {
-          setFirebaseUser(fbUser);
-          try {
-            const userProfile = await loadUserProfileFromFirestore(
-              fbUser.uid,
-              fbUser.email,
-              fbUser.displayName,
-              fbUser.photoURL
-            );
-            setUser(userProfile);
-          } catch (err) {
-            console.warn('Notice loading user profile from Firestore:', err);
+      unsubscribe = onAuthStateChanged(
+        auth,
+        async (fbUser) => {
+          if (fbUser) {
+            setFirebaseUser(fbUser);
+            void testConnection()
+              .then((ok) => setDatabaseError(ok ? null : 'Offline mode'))
+              .catch(() => setDatabaseError('Offline mode'));
+
+            try {
+              const userProfile = await loadUserProfileFromFirestore(
+                fbUser.uid,
+                fbUser.email,
+                fbUser.displayName,
+                fbUser.photoURL
+              );
+              setUser(userProfile);
+            } catch (err) {
+              console.warn('Notice loading user profile from Firestore:', err);
+              setDatabaseError('Offline mode');
+              const email = (fbUser.email || '').trim().toLowerCase();
+              const name = fbUser.displayName || (email ? email.split('@')[0] : 'Anime Fan');
+              setUser({
+                uid: fbUser.uid,
+                id: fbUser.uid,
+                email,
+                name,
+                displayName: name,
+                full_name: name,
+                photoURL: fbUser.photoURL || '',
+                profilePhoto: fbUser.photoURL || '',
+                role: isAuthorizedAdmin(email) ? 'owner' : 'user',
+                isBanned: false,
+                createdAt: Date.now(),
+              });
+            }
+          } else {
+            setFirebaseUser(null);
+            setUser(null);
           }
-        } else {
-          setFirebaseUser(null);
-          setUser(null);
+          setLoading(false);
+        },
+        (err: any) => {
+          const code = err?.code || 'auth/unknown';
+          const msg = err?.message || String(err || '');
+          console.error('[Firebase Auth Error - State Listener]', { code, message: msg, error: err });
+          setAuthError(`[${code}] ${msg}`);
+          setLoading(false);
         }
-        setLoading(false);
-      });
+      );
     } else {
       setLoading(false);
     }
@@ -77,7 +115,7 @@ export default function App() {
         unsubscribe();
       }
     };
-  }, [setUser, setFirebaseUser, setLoading]);
+  }, [setUser, setFirebaseUser, setLoading, setAuthError, setDatabaseError]);
 
   return (
     <BrowserRouter>

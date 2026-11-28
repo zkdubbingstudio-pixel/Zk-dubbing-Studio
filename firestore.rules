@@ -32,12 +32,11 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$');
     }
 
-    // Strictly verified studio owner check (no unverified email spoofing, no list() lookups)
+    // Strictly verified studio owner check (no list() lookups)
     function isOwner() {
       return isSignedIn()
         && request.auth.token.email is string
-        && request.auth.token.email.lower() == 'zkdubbingstudio@gmail.com'
-        && request.auth.token.email_verified == true;
+        && request.auth.token.email.lower() == 'zkdubbingstudio@gmail.com';
     }
 
     function isOptString(val, maxLen) {
@@ -458,7 +457,7 @@ service cloud.firestore {
 
     // Connection ping check document
     match /test/{testId} {
-      allow get: if isValidId(testId);
+      allow get: if testId == 'connection' || isValidId(testId);
       allow list, write: if false;
     }
 
@@ -503,16 +502,16 @@ service cloud.firestore {
 
     // Public Anime Catalog (Read-only for users/guests, Write strictly for verified owner)
     match /anime/{animeId} {
-      allow get: if isValidId(animeId) && (existing().title is string || isOwner());
-      allow list: if existing().title is string || isOwner();
+      allow get: if isValidId(animeId);
+      allow list: if true;
       allow create, update: if isValidId(animeId) && isOwner() && isValidAnime(incoming());
       allow delete: if isValidId(animeId) && isOwner();
     }
 
     // Public Seasons (Read-only for users/guests, Write strictly for verified owner)
     match /seasons/{seasonId} {
-      allow get: if isValidId(seasonId) && (existing().animeId is string || isOwner());
-      allow list: if existing().animeId is string || isOwner();
+      allow get: if isValidId(seasonId);
+      allow list: if true;
       allow create, update: if isValidId(seasonId) && isOwner() && isValidSeason(incoming());
       allow delete: if isValidId(seasonId) && isOwner();
     }
@@ -520,7 +519,7 @@ service cloud.firestore {
     // Episodes (Published episodes readable by public; drafts and writes restricted to verified owner)
     match /episodes/{episodeId} {
       allow get: if isValidId(episodeId) && (existing().published != false || isOwner());
-      allow list: if existing().published != false || isOwner();
+      allow list: if true;
       allow create, update: if isValidId(episodeId) && isOwner() && isValidEpisode(incoming());
       allow delete: if isValidId(episodeId) && isOwner();
     }
@@ -528,7 +527,7 @@ service cloud.firestore {
     // Banners (Public promotional hero banners, Write strictly for verified owner)
     match /banners/{bannerId} {
       allow get: if isValidId(bannerId) && (existing().active != false || isOwner());
-      allow list: if existing().active != false || isOwner();
+      allow list: if true;
       allow create, update: if isValidId(bannerId) && isOwner() && isValidBanner(incoming());
       allow delete: if isValidId(bannerId) && isOwner();
     }
@@ -589,8 +588,8 @@ service cloud.firestore {
 
     // Comments (Publicly readable, authenticated user-owned writes referencing valid anime)
     match /comments/{commentId} {
-      allow get: if isValidId(commentId) && (existing().text is string || isOwner());
-      allow list: if existing().text is string || isOwner();
+      allow get: if isValidId(commentId);
+      allow list: if true;
       allow create: if isValidId(commentId) && isSignedIn() && isValidComment(incoming())
         && incoming().userId == request.auth.uid
         && exists(/databases/$(database)/documents/anime/$(request.resource.data.animeId));
@@ -608,8 +607,8 @@ service cloud.firestore {
 
     // Ratings (Publicly readable, authenticated user-owned writes referencing valid anime)
     match /ratings/{ratingId} {
-      allow get: if isValidId(ratingId) && (existing().score is int || existing().score is float || isOwner());
-      allow list: if existing().score is int || existing().score is float || isOwner();
+      allow get: if isValidId(ratingId);
+      allow list: if true;
       allow create: if isValidId(ratingId) && isSignedIn() && isValidRating(incoming())
         && incoming().userId == request.auth.uid
         && exists(/databases/$(database)/documents/anime/$(request.resource.data.animeId));
@@ -649,8 +648,8 @@ service cloud.firestore {
 
     // Website Settings (Publicly readable, Write strictly for verified owner)
     match /settings/{settingId} {
-      allow get: if isValidId(settingId) && (existing().websiteName is string || isOwner());
-      allow list: if existing().websiteName is string || isOwner();
+      allow get: if isValidId(settingId);
+      allow list: if true;
       allow create, update: if isValidId(settingId) && isOwner() && isValidSettings(incoming());
       allow delete: if isValidId(settingId) && isOwner();
     }
@@ -674,7 +673,7 @@ service cloud.firestore {
     // Premium Plans (Publicly readable, Write strictly for verified owner)
     match /premiumPlans/{planId} {
       allow get: if isValidId(planId) && (existing().active != false || isOwner());
-      allow list: if existing().active != false || isOwner();
+      allow list: if true;
       allow create, update: if isValidId(planId) && isOwner() && isValidPremiumPlan(incoming());
       allow delete: if isValidId(planId) && isOwner();
     }

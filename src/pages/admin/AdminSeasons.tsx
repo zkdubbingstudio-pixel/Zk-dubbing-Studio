@@ -4,7 +4,7 @@ import {
   CheckCircle2, AlertCircle, Sparkles, ArrowUp, ArrowDown, 
   Search, Film, Activity, ChevronRight 
 } from 'lucide-react';
-import { getAllAnime, getAllSeasons, saveSeasonBoth, deleteSeasonBoth, formatDbError } from '../../lib/dataService';
+import { getAllAnime, getAllSeasons, saveSeasonBoth, deleteSeasonBoth, formatDbError, verifyFirestoreHealth } from '../../lib/dataService';
 import ImageUpload from '../../components/admin/ImageUpload';
 import { logAdminActivity } from '../../lib/activityLogger';
 import SmartImage from '../../components/SmartImage';
@@ -39,14 +39,19 @@ export default function AdminSeasons() {
   const fetchData = async () => {
     try {
       setError(null);
+      verifyFirestoreHealth()
+        .then((status) => {
+          if (!status.ok) setError(status.details);
+        })
+        .catch(() => {});
       const [animes, list] = await Promise.all([
         getAllAnime().catch(() => []),
         getAllSeasons().catch(() => [])
       ]);
       setAnimeList(animes || []);
       setSeasons(list || []);
-    } catch {
-      setError("Failed to load seasons data.");
+    } catch (err: any) {
+      setError(formatDbError(err));
     } finally {
       setLoading(false);
     }

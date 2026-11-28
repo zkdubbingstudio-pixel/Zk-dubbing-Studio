@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { db } from '../../lib/firebase';
 import { collection, doc, getDocs, updateDoc, deleteDoc } from 'firebase/firestore';
-import { getUserProgress } from '../../lib/dataService';
+import { getUserProgress, formatDbError } from '../../lib/dataService';
 import { 
   Users, Search as SearchIcon, Trash2, Ban, CheckCircle, 
   Edit2, X, Save, History, Clock, Film, Play, UserCheck, 
@@ -72,7 +72,9 @@ export default function AdminUsers() {
 
       setUsers(userList);
     } catch (err: any) {
-      console.warn(err.message || err);
+      const formatted = formatDbError(err);
+      console.warn('[Firestore Error - AdminUsers]:', formatted);
+      setError(formatted);
     } finally {
       setLoading(false);
     }

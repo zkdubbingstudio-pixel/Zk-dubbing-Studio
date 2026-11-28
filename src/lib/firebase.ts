@@ -21,7 +21,7 @@ import {
   getDocFromServer,
   type Firestore,
 } from 'firebase/firestore';
-import { getStorage, type FirebaseStorage } from 'firebase/storage';
+import { getInstallations, getToken } from 'firebase/installations';
 import { getAnalytics, isSupported as isAnalyticsSupported, logEvent, type Analytics } from 'firebase/analytics';
 import { initializeAppCheck, ReCaptchaV3Provider, type AppCheck } from 'firebase/app-check';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -62,62 +62,64 @@ export function purgeOversizedCache(): void {
 
 purgeOversizedCache();
 
-// Resolved Firebase configuration
+const ACTIVE_PROJECT_ID = firebaseConfig.projectId || 'zk-voice-hub-c4f67';
+
+function cleanEnvValue(envVal: unknown, fallback: string, requiredSubstring?: string): string {
+  const raw = typeof envVal === 'string' ? envVal.trim() : '';
+  if (
+    !raw ||
+    raw.includes('=') ||
+    raw.startsWith('your_') ||
+    (requiredSubstring && !raw.includes(requiredSubstring))
+  ) {
+    return (fallback || '').trim();
+  }
+  return raw;
+}
+
+const cfgRecord = firebaseConfig as Record<string, string | undefined>;
+
+// Single unified Firebase configuration for zk-voice-hub-c4f67
+const rawMeasurementId = cleanEnvValue(
+  import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+  cfgRecord.measurementId || '',
+  'G-'
+);
+
 export const resolvedFirebaseConfig = {
-  apiKey:
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_API_KEY) ||
-    firebaseConfig.apiKey ||
-    '',
-  authDomain:
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_AUTH_DOMAIN) ||
-    firebaseConfig.authDomain ||
-    '',
-  projectId:
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_PROJECT_ID) ||
-    firebaseConfig.projectId ||
-    '',
-  storageBucket:
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_STORAGE_BUCKET) ||
-    firebaseConfig.storageBucket ||
-    '',
-  messagingSenderId:
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_MESSAGING_SENDER_ID) ||
-    firebaseConfig.messagingSenderId ||
-    '',
-  appId:
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_APP_ID) ||
-    firebaseConfig.appId ||
-    '',
-  measurementId:
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_MEASUREMENT_ID) ||
-    (firebaseConfig as any).measurementId ||
-    '',
-  firestoreDatabaseId:
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_DATABASE_ID) ||
-    (firebaseConfig as any).firestoreDatabaseId ||
-    '',
+  apiKey: cleanEnvValue(import.meta.env.VITE_FIREBASE_API_KEY, firebaseConfig.apiKey || ''),
+  authDomain: cleanEnvValue(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN, firebaseConfig.authDomain || '', ACTIVE_PROJECT_ID),
+  projectId: cleanEnvValue(import.meta.env.VITE_FIREBASE_PROJECT_ID, ACTIVE_PROJECT_ID, ACTIVE_PROJECT_ID),
+  messagingSenderId: cleanEnvValue(
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    firebaseConfig.messagingSenderId || '',
+    firebaseConfig.messagingSenderId
+  ),
+  appId: cleanEnvValue(import.meta.env.VITE_FIREBASE_APP_ID, firebaseConfig.appId || '', firebaseConfig.messagingSenderId),
+  ...(rawMeasurementId ? { measurementId: rawMeasurementId } : {}),
+  firestoreDatabaseId: cfgRecord.firestoreDatabaseId || '(default)',
 };
 
 // 1. Initialize Firebase App strictly once
 export const app = getApps().length === 0 ? initializeApp(resolvedFirebaseConfig) : getApp();
 
-// 2. Enable Firebase App Check when reCAPTCHA site key is configured
+// 2. Firebase App Check (disabled until Firebase Console App Check setup is complete and VITE_ENABLE_APP_CHECK=true)
 let appCheckInstance: AppCheck | null = null;
-if (typeof window !== 'undefined' && app) {
+const isAppCheckEnabled = cleanEnvValue(import.meta.env.VITE_ENABLE_APP_CHECK, '') === 'true';
+if (typeof window !== 'undefined' && app && isAppCheckEnabled) {
   try {
-    const recaptchaSiteKey =
-      (typeof import.meta !== 'undefined' && import.meta.env?.VITE_RECAPTCHA_SITE_KEY) ||
-      (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_APPCHECK_KEY) ||
-      (firebaseConfig as any).recaptchaSiteKey ||
-      '';
+    const recaptchaSiteKey = cleanEnvValue(
+      import.meta.env.VITE_RECAPTCHA_SITE_KEY,
+      cfgRecord.recaptchaSiteKey || ''
+    );
 
     if (
       recaptchaSiteKey &&
-      recaptchaSiteKey.trim().length > 10 &&
+      recaptchaSiteKey.length > 10 &&
       recaptchaSiteKey !== '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI'
     ) {
-      if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
-        (self as any).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+      if (import.meta.env.DEV) {
+        (self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN: boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
       }
       appCheckInstance = initializeAppCheck(app, {
         provider: new ReCaptchaV3Provider(recaptchaSiteKey),
@@ -125,7 +127,7 @@ if (typeof window !== 'undefined' && app) {
       });
     }
   } catch (err) {
-    if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+    if (import.meta.env.DEV) {
       console.warn('[Firebase App Check] Initialization notice:', err);
     }
   }
@@ -136,37 +138,48 @@ export const appCheck = appCheckInstance;
 export const auth = getAuth(app);
 
 if (typeof window !== 'undefined') {
-  setPersistence(auth, browserLocalPersistence).catch(() => {});
+  setPersistence(auth, browserLocalPersistence).catch((err: any) => {
+    console.warn('[Firebase Auth Persistence Warning]', err?.code || 'auth/persistence-error', err?.message || err);
+  });
 }
 
 export async function ensureAuthPersistence(): Promise<void> {
   if (!auth) return;
   try {
     await setPersistence(auth, browserLocalPersistence);
-  } catch (err: any) {
-    const msg = String(err?.message || err || '');
+  } catch (err: unknown) {
+    const fbErr = err as { code?: string; message?: string };
+    const msg = String(fbErr?.message || err || '');
     if (msg.includes('quota') || msg.includes('QuotaExceeded') || msg.includes('auth/internal-error')) {
       purgeOversizedCache();
       try {
         await setPersistence(auth, browserLocalPersistence);
-      } catch {}
+      } catch (retryErr: unknown) {
+        const retryFbErr = retryErr as { code?: string; message?: string };
+        console.warn(
+          '[Firebase Auth Persistence Retry Warning]',
+          retryFbErr?.code || 'auth/persistence-error',
+          retryFbErr?.message || retryErr
+        );
+      }
+    } else {
+      console.warn('[Firebase Auth Persistence Warning]', fbErr?.code || 'auth/persistence-error', msg);
     }
   }
 }
 
-// 4. Initialize Cloud Firestore targeting named database ID from firebase-applet-config.json
+// 4. Initialize Cloud Firestore targeting resolved database ID (named DB or '(default)')
 let firestoreDb: Firestore = null as unknown as Firestore;
 try {
   if (app) {
-    const databaseId = resolvedFirebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDatabaseId;
+    const databaseId = resolvedFirebaseConfig.firestoreDatabaseId || '(default)';
     try {
-      firestoreDb = initializeFirestore(
-        app,
-        { experimentalForceLongPolling: true },
-        databaseId
-      );
+      firestoreDb =
+        databaseId === '(default)'
+          ? initializeFirestore(app, { experimentalForceLongPolling: true })
+          : initializeFirestore(app, { experimentalForceLongPolling: true }, databaseId);
     } catch {
-      firestoreDb = getFirestore(app, databaseId);
+      firestoreDb = databaseId === '(default)' ? getFirestore(app) : getFirestore(app, databaseId);
     }
   }
 } catch (err) {
@@ -174,28 +187,25 @@ try {
 }
 export const db = firestoreDb;
 
-// 5. Initialize Firebase Storage (for posters, banners, episode thumbnails)
-let firebaseStorage: FirebaseStorage = null as unknown as FirebaseStorage;
-try {
-  if (app) {
-    firebaseStorage = getStorage(app);
-  }
-} catch (err) {
-  console.warn('Firebase Storage initialization warning:', err);
-}
-export const storage = firebaseStorage;
-
-// 6. Initialize Firebase Analytics safely (browser-only with support check)
+// 5. Initialize Firebase Analytics safely (verify Installations first so invalid API keys never cause unhandled rejections)
+const hasValidMeasurementId = /^G-[A-Z0-9]+$/i.test(rawMeasurementId);
 let analyticsInstance: Analytics | null = null;
 export const analyticsPromise: Promise<Analytics | null> =
-  typeof window !== 'undefined' && app
-    ? isAnalyticsSupported()
-        .then((supported) => {
+  typeof window !== 'undefined' &&
+  app &&
+  hasValidMeasurementId &&
+  Boolean(resolvedFirebaseConfig.apiKey)
+    ? (async () => {
+        try {
+          const supported = await isAnalyticsSupported();
           if (!supported) return null;
+          await getToken(getInstallations(app));
           analyticsInstance = getAnalytics(app);
           return analyticsInstance;
-        })
-        .catch(() => null)
+        } catch {
+          return null;
+        }
+      })()
     : Promise.resolve(null);
 
 export async function trackFirebaseAnalyticsEvent(
@@ -241,13 +251,50 @@ export interface FirestoreErrorInfo {
   };
 }
 
+let firestoreAvailable = true;
+let lastFirestoreError: string | null = null;
+
+export function getFirestoreConnectionStatus(): { available: boolean; error: string | null } {
+  return { available: firestoreAvailable, error: lastFirestoreError };
+}
+
+export function isFirestoreUnavailableError(error: unknown): boolean {
+  const err = error as { code?: string; message?: string } | null;
+  const code = String(err?.code || '').toLowerCase();
+  const msg = String(err?.message || error || '').toLowerCase();
+  return (
+    code === 'unavailable' ||
+    code === 'not-found' ||
+    code === 'failed-precondition' ||
+    msg.includes('the client is offline') ||
+    msg.includes('could not reach cloud firestore') ||
+    msg.includes('does not exist') ||
+    msg.includes('not_found') ||
+    msg.includes('unavailable')
+  );
+}
+
 export function handleFirestoreError(
   error: unknown,
   operationType: OperationType,
   path: string | null
 ): never {
+  const errObj = error as { code?: string; message?: string } | null;
+  const code = errObj?.code || 'firestore/error';
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const unavailable = isFirestoreUnavailableError(error);
+  if (unavailable) {
+    firestoreAvailable = false;
+    lastFirestoreError = `Database unavailable ([${code}] ${rawMessage})`;
+  }
+  const formattedError = unavailable
+    ? `Database unavailable ([${code}] ${rawMessage})`
+    : rawMessage.includes(code)
+    ? rawMessage
+    : `[${code}] ${rawMessage}`;
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: formattedError,
     authInfo: {
       userId: auth?.currentUser?.uid ?? null,
       email: auth?.currentUser?.email ?? null,
@@ -269,20 +316,32 @@ export function handleFirestoreError(
 }
 
 export async function testConnection(): Promise<boolean> {
-  if (!firestoreDb) return false;
+  if (!firestoreDb) {
+    firestoreAvailable = false;
+    lastFirestoreError = 'Offline mode ([firestore/not-initialized] Firestore instance is not initialized.)';
+    return false;
+  }
   try {
     await getDocFromServer(doc(firestoreDb, 'test', 'connection'));
+    firestoreAvailable = true;
+    lastFirestoreError = null;
     return true;
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
-    }
+  } catch (error: any) {
+    const code = error?.code || 'firestore/unavailable';
+    const message = error instanceof Error ? error.message : String(error || 'Firestore unavailable');
+    firestoreAvailable = false;
+    lastFirestoreError = `Offline mode ([${code}] ${message})`;
+    console.warn(`[Firestore Connection] [${code}] ${message}`);
     return false;
   }
 }
 
 if (typeof window !== 'undefined' && firestoreDb) {
   testConnection().catch(() => {});
+  // Automatically retry Firestore connection in the background every 10 seconds (Requirement 6)
+  setInterval(() => {
+    testConnection().catch(() => {});
+  }, 10000);
 }
 
 export {

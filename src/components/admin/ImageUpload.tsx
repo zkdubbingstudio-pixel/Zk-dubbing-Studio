@@ -1,10 +1,7 @@
-import React, { useState, useRef } from 'react';
-import imageCompression from 'browser-image-compression';
-import { UploadCloud, X, Loader2, Link as LinkIcon, Image as ImageIcon } from 'lucide-react';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { storage } from '../../lib/firebase';
+import React from 'react';
+import { X, Link as LinkIcon } from 'lucide-react';
 import { resolveImageUrl } from '../../lib/imageUtils';
-import { validateImageUpload, sanitizeUrl } from '../../lib/security';
+import { sanitizeUrl } from '../../lib/security';
 
 interface ImageUploadProps {
   label: string;
@@ -14,188 +11,53 @@ interface ImageUploadProps {
   className?: string;
 }
 
-function normalizeStorageFolder(folder: string): 'posters' | 'banners' | 'episode-thumbnails' | 'avatars' {
-  const lower = (folder || '').toLowerCase();
-  if (lower.includes('banner')) return 'banners';
-  if (lower.includes('episode') || lower.includes('thumb')) return 'episode-thumbnails';
-  if (lower.includes('avatar')) return 'avatars';
-  return 'posters';
-}
-
 export default function ImageUpload({
   label,
   value,
   onChange,
-  folder,
   className = 'h-40',
 }: ImageUploadProps) {
-  const [isDragging, setIsDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [mode, setMode] = useState<'upload' | 'url'>('upload');
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-  };
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (mode === 'url') return;
-    const file = e.dataTransfer.files?.[0];
-    if (file) await processFile(file);
-  };
-
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) await processFile(file);
-  };
-
-  const processFile = async (file: File) => {
-    setErrorMsg(null);
-    const validation = validateImageUpload(file);
-    if (!validation.valid) {
-      setErrorMsg(validation.error || 'Invalid file');
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    if (!storage) {
-      setErrorMsg('Firebase Storage is not initialized.');
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    setUploading(true);
-
-    try {
-      const options = {
-        maxSizeMB: 0.5,
-        maxWidthOrHeight: 1600,
-        useWebWorker: true,
-        fileType: 'image/webp',
-      };
-      const compressedFile = await imageCompression(file, options);
-      const storageFolder = normalizeStorageFolder(folder);
-      const randomSuffix = Math.random().toString(36).substring(2, 8);
-      const ext = compressedFile.type === 'image/webp' ? 'webp' : (file.name.split('.').pop() || 'webp').toLowerCase();
-      const objectPath = `${storageFolder}/${Date.now()}_${randomSuffix}.${ext}`;
-      const storageRef = ref(storage, objectPath);
-
-      await uploadBytes(storageRef, compressedFile, {
-        contentType: compressedFile.type || 'image/webp',
-        cacheControl: 'public, max-age=31536000',
-      });
-
-      const downloadUrl = await getDownloadURL(storageRef);
-      onChange(downloadUrl);
-    } catch (error: any) {
-      setErrorMsg(error?.message || 'Error uploading image to Firebase Storage. Please try again.');
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };
-
   const handleDelete = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     onChange('');
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   return (
     <div className="w-full">
       <div className="flex justify-between items-center mb-1">
         <label className="block text-xs font-medium text-white/50 uppercase tracking-wider">{label}</label>
-        <button
-          type="button"
-          onClick={() => setMode(mode === 'upload' ? 'url' : 'upload')}
-          className="text-xs text-brand flex items-center gap-1 hover:underline"
-        >
-          {mode === 'upload' ? (
-            <>
-              <LinkIcon className="w-3 h-3" /> Use URL
-            </>
-          ) : (
-            <>
-              <ImageIcon className="w-3 h-3" /> Upload File
-            </>
-          )}
-        </button>
+        <span className="text-xs text-brand flex items-center gap-1">
+          <LinkIcon className="w-3 h-3" /> Image URL
+        </span>
       </div>
 
-      {errorMsg && (
-        <div className="mb-2 p-2 bg-red-500/20 border border-red-500/30 rounded-lg text-xs text-red-400">
-          {errorMsg}
-        </div>
-      )}
+      <input
+        type="url"
+        value={value}
+        onChange={(e) => onChange(sanitizeUrl(e.target.value))}
+        placeholder="https://example.com/image.jpg"
+        className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand"
+      />
 
-      {mode === 'url' ? (
-        <input
-          type="url"
-          value={value}
-          onChange={(e) => onChange(sanitizeUrl(e.target.value))}
-          placeholder="https://example.com/image.jpg"
-          className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand"
-        />
-      ) : (
+      {value && (
         <div
-          onClick={() => !uploading && !value && fileInputRef.current?.click()}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          className={`relative flex flex-col items-center justify-center border-2 border-dashed rounded-xl overflow-hidden cursor-pointer transition-colors ${className} ${
-            isDragging ? 'border-brand bg-brand/5' : 'border-white/20 bg-black/50 hover:border-white/40'
-          } ${value ? 'border-transparent' : ''}`}
+          className={`relative mt-2 flex flex-col items-center justify-center rounded-xl overflow-hidden border border-white/10 bg-black/50 ${className}`}
         >
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileSelect}
-            accept="image/jpeg,image/png,image/webp"
-            className="hidden"
+          <img
+            src={resolveImageUrl(value)}
+            alt="Preview"
+            className="w-full h-full object-cover"
+            referrerPolicy="no-referrer"
           />
-
-          {uploading ? (
-            <div className="flex flex-col items-center p-4">
-              <Loader2 className="w-8 h-8 text-brand animate-spin mb-2" />
-              <p className="text-sm text-white font-medium">Uploading to Firebase Storage...</p>
-            </div>
-          ) : value ? (
-            <div className="relative w-full h-full group" onClick={() => fileInputRef.current?.click()}>
-              <img
-                src={resolveImageUrl(value)}
-                alt="Preview"
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-              />
-              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center">
-                <UploadCloud className="w-6 h-6 text-white mb-2" />
-                <p className="text-white text-sm font-medium">Click to replace</p>
-              </div>
-              <button
-                onClick={handleDelete}
-                className="absolute top-2 right-2 p-1.5 bg-red-500/80 hover:bg-red-500 text-white rounded-lg transition-colors z-10"
-                title="Remove Image"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center p-4 text-white/50 text-center">
-              <UploadCloud className="w-8 h-8 mb-2 opacity-50" />
-              <p className="text-sm font-medium text-white mb-1">Click or drag image here</p>
-              <p className="text-xs">JPG, PNG, WEBP</p>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={handleDelete}
+            className="absolute top-2 right-2 p-1.5 bg-red-500/80 hover:bg-red-500 text-white rounded-lg transition-colors z-10"
+            title="Remove Image"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
     </div>

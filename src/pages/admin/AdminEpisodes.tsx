@@ -8,7 +8,8 @@ import {
   getAllAnime, getAllSeasons, getAllEpisodes, 
   saveEpisodeBoth, deleteEpisodeBoth, saveSeasonBoth,
   extractAbyssUrl, extractFileMoonUrl, extractVDOHideUrl, resolveEpisodeServers,
-  formatDbError 
+  formatDbError,
+  verifyFirestoreHealth
 } from '../../lib/dataService';
 import ImageUpload from '../../components/admin/ImageUpload';
 import { logAdminActivity } from '../../lib/activityLogger';
@@ -63,6 +64,11 @@ export default function AdminEpisodes() {
   const fetchData = async () => {
     try {
       setError(null);
+      verifyFirestoreHealth()
+        .then((status) => {
+          if (!status.ok) setError(status.details);
+        })
+        .catch(() => {});
       const [animes, seasonsList, epList] = await Promise.all([
         getAllAnime(),
         getAllSeasons(),

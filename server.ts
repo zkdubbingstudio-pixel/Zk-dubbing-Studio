@@ -30,7 +30,7 @@ if (!FIREBASE_PROJECT_ID) {
       FIREBASE_PROJECT_ID = String(fbCfg.projectId || '').trim();
     }
   } catch {
-    FIREBASE_PROJECT_ID = 'gen-lang-client-0843629033';
+    FIREBASE_PROJECT_ID = '';
   }
 }
 
@@ -51,7 +51,7 @@ app.use((_req, res, next) => {
     "font-src 'self' data: https://fonts.gstatic.com",
     "img-src 'self' data: blob: https: http:",
     "media-src 'self' data: blob: https: http:",
-    "connect-src 'self' https://*.googleapis.com https://firebasestorage.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://*.google-analytics.com https://*.analytics.google.com https://*.run.app https://www.google.com",
+    "connect-src 'self' https://*.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://*.google-analytics.com https://*.analytics.google.com https://*.run.app https://www.google.com",
     "frame-src 'self' https: http:",
     "frame-ancestors 'self' https://*.google.com https://*.run.app https://aistudio.google.com",
     "object-src 'none'",
